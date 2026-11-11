@@ -2,6 +2,7 @@ import { ALL_FORMATS, BlobSource, CanvasSink, Input } from 'mediabunny'
 import type { FaceDetector } from '@mediapipe/tasks-vision'
 import wasmJs from '@mediapipe/tasks-vision/vision_wasm_internal.js?url'
 import wasmBin from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url'
+import modelUrl from '../assets/blaze_face_short_range.tflite?url'
 
 /** Rectangle in fractions of the video frame (0..1). */
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -13,7 +14,8 @@ export interface FacecamResult { rect: Rect; confidence: number }
 // with Whisper for the GPU. Its input is 128x128, so a small webcam overlay is invisible in a whole 16:9 frame:
 // each frame is searched as four square corner crops (faces fill ~5-20% of a crop), plus once whole as a veto
 // for talking-head videos.
-const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'
+// The model ships with the app (src/assets, from the MediaPipe float16 v1 short-range release) so detection has no CDN dependency.
+const MODEL = modelUrl
 const FRAMES = 16
 const WORK_W = 1280 // sampled frame width
 const CROP = 0.4 // corner crop side, as a fraction of the frame width
