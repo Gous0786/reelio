@@ -1,29 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
+import * as m from 'motion/react-m'
+import { AlertTriangle, Clapperboard, Crop, Database, Download, Maximize2, FilePlus2, FileVideo, RefreshCw, ScanText, Sparkles } from 'lucide-react'
 import type { Clip, Segment } from './lib/types'
 import { findClips } from './lib/llm'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
 import { createPool, type WhisperModel } from './lib/transcribe'
-
-type Stage = 'idle' | 'model' | 'transcribe' | 'clips' | 'done' | 'error'
-const STAGES: [Stage, string][] = [['model', 'Loading speech model'], ['transcribe', 'Extracting audio & transcribing'], ['clips', 'Finding clips']]
-const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
-const fmt1 = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
-const outName = (f: File, rank: number) => `${f.name.replace(/\.[^.]+$/, '')}-clip${rank}.mp4`
-function save(blob: Blob, name: string) {
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000)
-}
-const dur = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h ` : '') + `${Math.floor((s % 3600) / 60)}m ${Math.round(s % 60)}s`
+import { dur, fmt, outName, save } from './lib/format'
+import Background from './components/Background'
+import ClipCard from './components/ClipCard'
+import DropZone from './components/DropZone'
+import { EmptyIllustration } from './components/Illustrations'
+import ProgressView, { NO_INFO, type RunInfo, type Stage } from './components/ProgressView'
+import Segmented from './components/Segmented'
+import SettingsDrawer from './components/SettingsDrawer'
+import { Alert, Button, Chip, Progress, card } from './components/ui'
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState('')
   const [stage, setStage] = useState<Stage>('idle')
   const [status, setStatus] = useState('')
+  const [info, setInfo] = useState<RunInfo>(NO_INFO)
   const [error, setError] = useState<{ msg: string; retry: boolean } | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('openrouter_key') ?? '')
@@ -34,8 +33,9 @@ export default function App() {
   const [warn, setWarn] = useState('')
   const [fit, setFit] = useState<Fit>(() => (localStorage.getItem('reelio_fit') === 'blur' ? 'blur' : 'cover'))
   const [cached, setCached] = useState(false)
-  const [all, setAll] = useState<string | null>(null) // "download all" progress text
+  const [all, setAll] = useState<{ i: number; n: number; p: number } | null>(null) // "download all" progress
   const [allErr, setAllErr] = useState('')
+  const [renders, setRenders] = useState(0) // single-clip exports in flight
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
   const unsupported = checkSupport()
 
@@ -58,7 +58,7 @@ export default function App() {
   }
 
   const start = async (f: File, force = false) => {
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
@@ -66,6 +66,7 @@ export default function App() {
       audio = await openAudio(f)
       const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-tiny'
       const mname = model.split('/')[1]
+      setInfo(i => ({ ...i, model: mname }))
       const key = cacheKey(f, model)
       if (force) await delTranscript(key)
       else {
@@ -73,9 +74,10 @@ export default function App() {
         if (hit?.length) { segments.current = hit; setCached(true); await runClips(hit); return }
       }
       setStatus(`Downloading ${mname}… 0%`)
-      tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => setStatus(`Downloading ${mname}… ${p}%`))
+      tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => { setStatus(`Downloading ${mname}… ${p}%`); setInfo(i => ({ ...i, download: p })) })
       const pool = tr.workers
       const device = `${mname}${pool.length > 1 ? ` × ${pool.length} workers` : ''} · ` + (tr.device === 'webgpu' ? `WebGPU${tr.gpu ? ` (${tr.gpu})` : ''}` : 'WASM (CPU, slower)')
+      setInfo(i => ({ ...i, workers: pool.length, device: tr!.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU, slower)', gpu: tr!.gpu || null }))
       if (tr.device === 'webgpu' && /intel/i.test(tr.gpu))
         setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
       setStage('transcribe')
@@ -86,6 +88,7 @@ export default function App() {
         const el = (Date.now() - t0) / 1000
         const left = done > 0 ? ((audio!.duration - done) * el) / done : 0
         setStatus(`Transcribing… ${Math.min(100, Math.round((done / audio!.duration) * 100))}% · ${dur(el)} elapsed${done > 0 ? ` · ~${dur(left)} left · ${(done / el).toFixed(1)}× realtime` : ''} · ${device}`)
+        setInfo(i => ({ ...i, pct: Math.min(100, Math.round((done / audio!.duration) * 100)), elapsed: el, left: done > 0 ? left : null, speed: done > 0 ? done / el : null }))
       }
       report()
       // One lane per worker. Lanes pull the next slice only when their worker is idle, so at most one slice per
@@ -128,196 +131,161 @@ export default function App() {
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null }
+  const reset = () => { setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
     setAllErr('')
     for (let i = 0; i < clips.length; i++) {
       try {
-        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p =>
-          setAll(`Rendering clip ${i + 1}/${clips.length} · ${p}% · overall ${Math.round(((i + p / 100) / clips.length) * 100)}%`))
+        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }))
         save(blob, outName(file!, i + 1))
       } catch (e) { setAllErr(`Clip ${i + 1}: ${e instanceof Error ? e.message : e}`); break }
     }
     setAll(null)
   }
-  const onFiles = (fl: FileList | null) => { const f = fl?.[0]; if (f && !busy) start(f) }
+  const onFiles = (f: File) => { if (!busy) start(f) }
+  const gpuBusy = busy || all !== null || renders > 0
+  const allPct = all ? Math.round(((all.i + all.p / 100) / all.n) * 100) : 0
 
   return (
-    <main>
-      <header>
-        <h1>Reelio</h1>
-        <p>Drop a long video, get ranked vertical clips. Everything runs in your browser.</p>
-      </header>
+    <MotionConfig reducedMotion="user">
+      <LazyMotion features={domAnimation} strict>
+        <Background paused={gpuBusy} />
+        <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pt-5 pb-16 sm:px-6">
+          <header className="flex items-center justify-between gap-3 pb-6">
+            <button type="button" onClick={() => !busy && reset()} className="group flex items-center gap-3 rounded-2xl" aria-label="Reelio home">
+              <span className="grid size-10 place-items-center rounded-2xl bg-linear-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg shadow-violet-900/40">
+                <Clapperboard className="size-5" aria-hidden />
+              </span>
+              <span className="text-left">
+                <span className="font-display block text-xl leading-none font-semibold tracking-tight text-white">Reelio</span>
+                <span className="hidden text-xs text-zinc-400 sm:block">Long video to ranked shorts</span>
+              </span>
+            </button>
+            <SettingsDrawer {...{ geminiKey, apiKey, modelPref, workerPref, fit, setGeminiKey, setApiKey, setModelPref, setWorkerPref, setFit }} />
+          </header>
 
-      {unsupported && <div className="error">{unsupported}</div>}
+          <main className="flex flex-1 flex-col gap-5">
+            {unsupported && <Alert tone="error" title="Browser not supported">{unsupported}</Alert>}
 
-      {stage === 'idle' && !unsupported && (
-        <>
-          <label className="drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); onFiles(e.dataTransfer.files) }}>
-            <input type="file" accept="video/*,audio/*" hidden onChange={e => onFiles(e.target.files)} />
-            <strong>Drop a video here</strong>
-            <span>or click to choose a file</span>
-          </label>
-          <details>
-            <summary>Settings</summary>
-            <label>Gemini API key (optional, tried first)
-              <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} placeholder="AIza… / AQ.… (empty = skip Gemini)" />
-            </label>
-            <label>OpenRouter API key (optional)
-              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-… (empty = use /api/chat proxy)" />
-            </label>
-            <label>Speech model
-              <select value={modelPref} onChange={e => setModelPref(e.target.value as 'auto' | WhisperModel)}>
-                <option value="auto">auto (whisper-tiny)</option>
-                <option value="onnx-community/whisper-base">whisper-base (better, slower)</option>
-                <option value="onnx-community/whisper-tiny">whisper-tiny (faster)</option>
-              </select>
-            </label>
-            <label>Parallel workers
-              <select value={workerPref} onChange={e => setWorkerPref(e.target.value as 'auto' | '1' | '2' | '3')}>
-                <option value="auto">auto</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
-            </label>
-          </details>
-        </>
-      )}
+            <AnimatePresence mode="wait" initial={false}>
+              {stage === 'idle' && !unsupported && (
+                <m.div key="idle" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.25 }}>
+                  <DropZone onFile={onFiles} />
+                </m.div>
+              )}
+            </AnimatePresence>
 
-      {file && stage !== 'idle' && (
-        <div className="bar">
-          <span className="name">{file.name}</span>
-          <span className="actions">
-            {!busy && segments.current && <button className="ghost" title="Ask the LLM again, ignoring the cached clip result" onClick={() => runClips(segments.current!, true)}>Find clips again</button>}
-            {!busy && <button className="ghost" title="Ignore the cached transcript and transcribe again" onClick={() => start(file, true)}>Re-transcribe</button>}
-            <button className="ghost" onClick={reset}>New video</button>
-          </span>
+            {file && stage !== 'idle' && (
+              <m.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`${card} flex flex-wrap items-center justify-between gap-3 p-3.5 sm:p-4`}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/8 text-violet-200"><FileVideo className="size-5" aria-hidden /></span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white" title={file.name}>{file.name}</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <Chip>{(file.size / 1048576).toFixed(file.size > 1e9 ? 0 : 1)} MB</Chip>
+                      {stage === 'done' && <Chip tone="accent"><Sparkles className="size-3" aria-hidden />{clips.length} clip{clips.length === 1 ? '' : 's'}</Chip>}
+                      {cached && stage !== 'model' && <Chip tone="good"><Database className="size-3" aria-hidden />Transcript from cache</Chip>}
+                      {answeredBy && stage === 'done' && <Chip>via {answeredBy}</Chip>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {!busy && segments.current && (
+                    <Button size="sm" title="Ask the LLM again, ignoring the cached clip result" icon={<RefreshCw className="size-3.5" />} onClick={() => runClips(segments.current!, true)}>Find clips again</Button>
+                  )}
+                  {!busy && (
+                    <Button size="sm" title="Ignore the cached transcript and transcribe again" icon={<ScanText className="size-3.5" />} onClick={() => start(file, true)}>Re-transcribe</Button>
+                  )}
+                  <Button size="sm" variant="ghost" icon={<FilePlus2 className="size-3.5" />} onClick={reset}>New video</Button>
+                </div>
+              </m.section>
+            )}
+
+            {busy && (
+              <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+                <ProgressView stage={stage} status={status} info={info} />
+              </m.div>
+            )}
+
+            {warn && <Alert tone="warn" title="Heads up"><span className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />{warn}</span></Alert>}
+
+            {error && (
+              <Alert
+                tone="error" title={error.retry ? 'Could not find clips' : 'Something went wrong'}
+                actions={<>
+                  {error.retry && segments.current && <Button variant="danger" size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => runClips(segments.current!, true)}>Retry (transcript is cached)</Button>}
+                  {!error.retry && <Button variant="danger" size="sm" icon={<FilePlus2 className="size-3.5" />} onClick={reset}>Try another video</Button>}
+                </>}
+              >{error.msg}</Alert>
+            )}
+
+            {stage === 'clips' && (
+              <div className="grid gap-5 lg:grid-cols-2" aria-hidden>
+                {[0, 1].map(i => (
+                  <div key={i} className={`${card} flex gap-5 p-5`}>
+                    <div className="animate-shimmer aspect-9/16 w-[40%] max-w-47.5 rounded-2xl bg-[linear-gradient(90deg,#ffffff0a,#ffffff18,#ffffff0a)] bg-[length:200%_100%]" />
+                    <div className="flex flex-1 flex-col gap-3">
+                      {[60, 90, 75, 40].map((w, j) => <div key={j} className="h-3 rounded-full bg-white/8" style={{ width: `${w}%` }} />)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {stage === 'done' && (
+              <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
+                {clips.length > 0 && (
+                  <section className={`${card} flex flex-col gap-3 p-3.5 sm:flex-row sm:items-center sm:justify-between sm:p-4`} aria-label="Export options">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-sm font-medium text-zinc-200">Framing</span>
+                      <Segmented label="Framing" value={fit} onChange={setFit} options={[
+                        { value: 'cover', label: <><Crop className="size-3.5" />Centre crop</>, hint: 'Fill the 9:16 frame' },
+                        { value: 'blur', label: <><Maximize2 className="size-3.5" />Fit + blur</>, hint: 'Whole picture over a blurred background' },
+                      ]} />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-2 sm:w-72">
+                      {all && (
+                        <div>
+                          <div className="mb-1 flex justify-between text-xs text-zinc-300 tabular-nums">
+                            <span>Rendering clip {all.i + 1}/{all.n} · {all.p}%</span><span>overall {allPct}%</span>
+                          </div>
+                          <Progress value={allPct} />
+                        </div>
+                      )}
+                      <Button variant="primary" disabled={all !== null || renders > 0} onClick={downloadAll} icon={<Download className="size-4" />}>
+                        {all ? 'Rendering…' : `Download all (${clips.length})`}
+                      </Button>
+                    </div>
+                  </section>
+                )}
+                {allErr && <Alert tone="error">{allErr}</Alert>}
+
+                {clips.length === 0 && (
+                  <div className={`${card} flex flex-col items-center gap-3 px-6 py-12 text-center`}>
+                    <EmptyIllustration className="w-40" />
+                    <h2 className="font-display text-xl font-semibold text-white">No clips found</h2>
+                    <p className="max-w-sm text-sm text-zinc-400">The model did not pick any moments. Try a video with more spoken content, or ask again.</p>
+                    {segments.current && <Button variant="primary" icon={<RefreshCw className="size-4" />} onClick={() => runClips(segments.current!, true)}>Find clips again</Button>}
+                  </div>
+                )}
+
+                <section className="grid gap-5 lg:grid-cols-2" aria-label="Clips">
+                  {clips.map((c, i) => (
+                    <m.div key={i} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 5) * 0.05, duration: 0.3 }}>
+                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fit} locked={all !== null}
+                        onTrim={t => trim(i, t)} onRendering={a => setRenders(n => Math.max(0, n + (a ? 1 : -1)))} />
+                    </m.div>
+                  ))}
+                </section>
+              </m.div>
+            )}
+          </main>
+
+          <footer className="pt-10 text-center text-xs text-zinc-500">Video and audio stay on your device. Only the transcript text is sent to the LLM.</footer>
         </div>
-      )}
-
-      {busy && (
-        <ol className="stages">
-          {STAGES.map(([s, label], i) => {
-            const cur = STAGES.findIndex(x => x[0] === stage)
-            return <li key={s} className={i < cur ? 'done' : i === cur ? 'active' : ''}>{label}{i === cur && <small>{status}</small>}</li>
-          })}
-        </ol>
-      )}
-
-      {cached && stage !== 'model' && <p className="note">Transcript loaded from cache (no transcription needed).</p>}
-      {warn && <div className="error">{warn}</div>}
-
-      {error && (
-        <div className="error">
-          <p style={{ whiteSpace: 'pre-line' }}>{error.msg}</p>
-          {error.retry && segments.current && <button onClick={() => runClips(segments.current!, true)}>Retry (transcript is cached)</button>}
-          {!error.retry && <button onClick={reset}>Try another video</button>}
-        </div>
-      )}
-
-      {stage === 'done' && (
-        <>
-          {clips.length > 0 && (
-            <div className="toolbar">
-              <label>Framing
-                <select value={fit} onChange={e => setFit(e.target.value as Fit)}>
-                  <option value="cover">Centre crop</option>
-                  <option value="blur">Fit with blurred background</option>
-                </select>
-              </label>
-              <button disabled={all !== null} onClick={downloadAll}>{all ?? `Download all (${clips.length})`}</button>
-            </div>
-          )}
-          {allErr && <p className="err">{allErr}</p>}
-          {answeredBy && <p className="note">Clips found by {answeredBy}</p>}
-          <section className="grid">
-            {clips.length === 0 && <p>No clips were found. Try a video with more spoken content.</p>}
-            {clips.map((c, i) => <ClipCard key={i} rank={i + 1} clip={c} file={file!} url={url} fit={fit} locked={all !== null} onTrim={t => trim(i, t)} />)}
-          </section>
-        </>
-      )}
-    </main>
-  )
-}
-
-function ClipCard({ rank, clip, file, url, fit, locked, onTrim }: {
-  rank: number; clip: Clip; file: File; url: string; fit: Fit; locked: boolean; onTrim: (t: { start: number; end: number }) => void
-}) {
-  const vid = useRef<HTMLVideoElement>(null)
-  const bg = useRef<HTMLVideoElement>(null) // blurred copy behind the video in 'blur' mode, kept in sync
-  const [playing, setPlaying] = useState(false)
-  const [pct, setPct] = useState<number | null>(null)
-  const [err, setErr] = useState('')
-  const [copied, setCopied] = useState(false)
-
-  const toggle = () => {
-    const v = vid.current!
-    if (!v.paused) return v.pause()
-    if (v.currentTime < clip.start || v.currentTime >= clip.end - 0.1) v.currentTime = clip.start
-    v.play()
-  }
-  const nudge = (which: 'start' | 'end', d: number) => {
-    const max = Number.isFinite(vid.current?.duration) ? vid.current!.duration : Infinity
-    let { start, end } = clip
-    if (which === 'start') start = Math.max(0, Math.min(start + d, end - 1))
-    else end = Math.min(max, Math.max(end + d, start + 1))
-    onTrim({ start, end })
-    if (vid.current) vid.current.currentTime = which === 'start' ? start : Math.max(start, end - 2) // show the edited edge
-  }
-  const download = async () => {
-    setErr(''); setPct(0)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct), outName(file, rank)) }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
-    setPct(null)
-  }
-  const copy = async () => {
-    await navigator.clipboard.writeText([clip.caption, clip.hashtags?.join(' ')].filter(Boolean).join('\n\n'))
-    setCopied(true); setTimeout(() => setCopied(false), 1500)
-  }
-  const sync = (v: HTMLVideoElement) => {
-    const b = bg.current
-    if (b && Math.abs(b.currentTime - v.currentTime) > 0.25) b.currentTime = v.currentTime
-  }
-  const trimRow = (which: 'start' | 'end') => (
-    <span className="trim">{which} {fmt1(clip[which])}
-      <button className="ghost" onClick={() => nudge(which, -0.5)} title={`${which} -0.5 s`}>−</button>
-      <button className="ghost" onClick={() => nudge(which, 0.5)} title={`${which} +0.5 s`}>+</button>
-    </span>
-  )
-
-  return (
-    <article className="card">
-      <div className={`phone ${fit}`} onClick={toggle}>
-        {fit === 'blur' && <video ref={bg} className="bgv" src={`${url}#t=${clip.start}`} muted preload="metadata" playsInline />}
-        <video ref={vid} className="main" src={`${url}#t=${clip.start}`} preload="metadata" playsInline
-          onPlay={() => { setPlaying(true); bg.current?.play().catch(() => {}) }}
-          onPause={() => { setPlaying(false); bg.current?.pause() }}
-          onSeeked={e => sync(e.currentTarget)}
-          onTimeUpdate={e => {
-            const v = e.currentTarget
-            if (v.currentTime >= clip.end) { v.pause(); v.currentTime = clip.start } else sync(v)
-          }} />
-        {!playing && <span className="play">▶</span>}
-      </div>
-      <div className="info">
-        <div className="top"><span className="score">{Math.round(clip.score)}</span><span className="dur">#{rank} · {(clip.end - clip.start).toFixed(1)}s</span></div>
-        <div className="trims">{trimRow('start')}{trimRow('end')}</div>
-        <h3>{clip.title}</h3>
-        <p className="hook">“{clip.hook}”</p>
-        <p className="reason">{clip.reason}</p>
-        {(clip.caption || clip.hashtags?.length) && (
-          <div className="caption">
-            {clip.caption && <p>{clip.caption}</p>}
-            {clip.hashtags?.length ? <p className="tags">{clip.hashtags.join(' ')}</p> : null}
-            <button className="ghost" onClick={copy}>{copied ? 'Copied' : 'Copy caption'}</button>
-          </div>
-        )}
-        <button disabled={pct !== null || locked} onClick={download}>{pct === null ? 'Download MP4' : `Rendering… ${pct}%`}</button>
-        {err && <p className="err">{err}</p>}
-      </div>
-    </article>
+      </LazyMotion>
+    </MotionConfig>
   )
 }
