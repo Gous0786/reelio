@@ -3,7 +3,7 @@ import type { Clip, Segment } from './lib/types'
 import { findClips } from './lib/llm'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
-import { createTranscriber, type WhisperModel } from './lib/transcribe'
+import { createPool, type WhisperModel } from './lib/transcribe'
 
 type Stage = 'idle' | 'model' | 'transcribe' | 'clips' | 'done' | 'error'
 const STAGES: [Stage, string][] = [['model', 'Loading speech model'], ['transcribe', 'Extracting audio & transcribing'], ['clips', 'Finding clips']]
@@ -28,6 +28,7 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('openrouter_key') ?? '')
   const [modelPref, setModelPref] = useState<'auto' | WhisperModel>('auto')
+  const [workerPref, setWorkerPref] = useState<'auto' | '1' | '2' | '3'>('auto')
   const [warn, setWarn] = useState('')
   const [fit, setFit] = useState<Fit>(() => (localStorage.getItem('reelio_fit') === 'blur' ? 'blur' : 'cover'))
   const [cached, setCached] = useState(false)
@@ -53,13 +54,11 @@ export default function App() {
   const start = async (f: File, force = false) => {
     setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); segments.current = null
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
-    let tr: Awaited<ReturnType<typeof createTranscriber>> | null = null
+    let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
       setStage('model'); setStatus('Opening file…')
       audio = await openAudio(f)
-      // tiny is ~2x faster; worth the accuracy loss only on long videos
-      const model: WhisperModel = modelPref !== 'auto' ? modelPref
-        : audio.duration > 1800 ? 'onnx-community/whisper-tiny' : 'onnx-community/whisper-base'
+      const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-tiny'
       const mname = model.split('/')[1]
       const key = cacheKey(f, model)
       if (force) await delTranscript(key)
@@ -68,8 +67,9 @@ export default function App() {
         if (hit?.length) { segments.current = hit; setCached(true); await runClips(hit); return }
       }
       setStatus(`Downloading ${mname}… 0%`)
-      tr = await createTranscriber(model, p => setStatus(`Downloading ${mname}… ${p}%`))
-      const device = `${mname} · ` + (tr.device === 'webgpu' ? `WebGPU${tr.gpu ? ` (${tr.gpu})` : ''}` : 'WASM (CPU, slower)')
+      tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => setStatus(`Downloading ${mname}… ${p}%`))
+      const pool = tr.workers
+      const device = `${mname}${pool.length > 1 ? ` × ${pool.length} workers` : ''} · ` + (tr.device === 'webgpu' ? `WebGPU${tr.gpu ? ` (${tr.gpu})` : ''}` : 'WASM (CPU, slower)')
       if (tr.device === 'webgpu' && /intel/i.test(tr.gpu))
         setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
       setStage('transcribe')
@@ -82,24 +82,35 @@ export default function App() {
         setStatus(`Transcribing… ${Math.min(100, Math.round((done / audio!.duration) * 100))}% · ${dur(el)} elapsed${done > 0 ? ` · ~${dur(left)} left · ${(done / el).toFixed(1)}× realtime` : ''} · ${device}`)
       }
       report()
-      try {
-        for await (const sl of audio.slices()) {
+      // One lane per worker. Lanes pull the next slice only when their worker is idle, so at most one slice per
+      // worker (plus the generator's own buffer) is in memory. Segments arrive out of order; sorted below.
+      const it = audio.slices()
+      let fatal: unknown = null
+      const lane = async (w: (typeof pool)[number]) => {
+        for (;;) {
+          const { value: sl, done: end } = await it.next()
+          if (end) return
           const len = sl.audio.length / 16000
           let buf = sl.audio
-          for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
-            try { segs.push(...(await tr.run(buf, sl.offset))); break } catch (e) {
-              const back = (e as { audio?: Float32Array }).audio
-              if (!back) throw e // worker died: cannot continue
-              if (attempt === 1) { skipped++; break }
-              buf = back
+          try {
+            for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
+              try { segs.push(...(await w.run(buf, sl.offset))); break } catch (e) {
+                const back = (e as { audio?: Float32Array }).audio
+                if (!back) throw e // worker died: this lane stops
+                if (attempt === 1) { skipped++; break }
+                buf = back
+              }
             }
-          }
-          done = sl.offset + len; report()
+          } catch (e) { fatal ??= e; return }
+          done += len; report()
         }
-      } catch (e) {
-        if (!segs.length) throw e
+      }
+      await Promise.all(pool.map(lane))
+      segs.sort((x, y) => x.start - y.start)
+      if (fatal) {
+        if (!segs.length) throw fatal
         partial = true
-        setWarn(`Transcription stopped at ${fmt(done)} (${e instanceof Error ? e.message : e}); clips use the partial transcript.`)
+        setWarn(`A transcription worker stopped (${fatal instanceof Error ? fatal.message : fatal}) after ${fmt(done)} of audio; clips use the partial transcript.`)
       }
       if (skipped) setWarn(w => w || `${skipped} audio slice(s) failed and were skipped.`)
       if (!segs.length) throw new Error('No speech was detected in this video.')
@@ -150,9 +161,17 @@ export default function App() {
             </label>
             <label>Speech model
               <select value={modelPref} onChange={e => setModelPref(e.target.value as 'auto' | WhisperModel)}>
-                <option value="auto">auto (tiny for videos over 30 min, else base)</option>
-                <option value="onnx-community/whisper-base">whisper-base (better)</option>
+                <option value="auto">auto (whisper-tiny)</option>
+                <option value="onnx-community/whisper-base">whisper-base (better, slower)</option>
                 <option value="onnx-community/whisper-tiny">whisper-tiny (faster)</option>
+              </select>
+            </label>
+            <label>Parallel workers
+              <select value={workerPref} onChange={e => setWorkerPref(e.target.value as 'auto' | '1' | '2' | '3')}>
+                <option value="auto">auto</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
               </select>
             </label>
           </details>
