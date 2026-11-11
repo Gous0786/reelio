@@ -27,6 +27,8 @@ export default function App() {
   const [error, setError] = useState<{ msg: string; retry: boolean } | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('openrouter_key') ?? '')
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') ?? '')
+  const [answeredBy, setAnsweredBy] = useState('')
   const [modelPref, setModelPref] = useState<'auto' | WhisperModel>('auto')
   const [workerPref, setWorkerPref] = useState<'auto' | '1' | '2' | '3'>('auto')
   const [warn, setWarn] = useState('')
@@ -38,13 +40,17 @@ export default function App() {
   const unsupported = checkSupport()
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
+  useEffect(() => { localStorage.setItem('gemini_key', geminiKey) }, [geminiKey])
   useEffect(() => { localStorage.setItem('reelio_fit', fit) }, [fit])
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
 
-  const runClips = async (segs: Segment[]) => {
-    setStage('clips'); setError(null); setStatus('Asking the LLM for the best moments…')
+  const runClips = async (segs: Segment[], force = false) => {
+    setStage('clips'); setError(null); setAnsweredBy(''); setStatus('Asking the LLM for the best moments…')
     try {
-      setClips(await findClips(segs, { apiKey: apiKey.trim() || undefined, maxClips: 8, onProgress: setStatus }))
+      setClips(await findClips(segs, {
+        apiKey: apiKey.trim() || undefined, geminiKey: geminiKey.trim() || undefined, force, maxClips: 8,
+        onProgress: setStatus, onAnswered: setAnsweredBy,
+      }))
       setStage('done')
     } catch (e) {
       setError({ msg: `Finding clips failed: ${e instanceof Error ? e.message : e}`, retry: true }); setStage('error')
@@ -52,7 +58,7 @@ export default function App() {
   }
 
   const start = async (f: File, force = false) => {
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); segments.current = null
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
@@ -116,13 +122,13 @@ export default function App() {
       if (!segs.length) throw new Error('No speech was detected in this video.')
       segments.current = segs
       if (!partial && !skipped) await putTranscript(key, segs)
-      await runClips(segs)
+      await runClips(segs, force)
     } catch (e) {
       setError({ msg: e instanceof Error ? e.message : String(e), retry: false }); setStage('error')
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { setWarn(''); setCached(false); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null }
+  const reset = () => { setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
@@ -156,6 +162,9 @@ export default function App() {
           </label>
           <details>
             <summary>Settings</summary>
+            <label>Gemini API key (optional, tried first)
+              <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} placeholder="AIza… / AQ.… (empty = skip Gemini)" />
+            </label>
             <label>OpenRouter API key (optional)
               <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-… (empty = use /api/chat proxy)" />
             </label>
@@ -182,6 +191,7 @@ export default function App() {
         <div className="bar">
           <span className="name">{file.name}</span>
           <span className="actions">
+            {!busy && segments.current && <button className="ghost" title="Ask the LLM again, ignoring the cached clip result" onClick={() => runClips(segments.current!, true)}>Find clips again</button>}
             {!busy && <button className="ghost" title="Ignore the cached transcript and transcribe again" onClick={() => start(file, true)}>Re-transcribe</button>}
             <button className="ghost" onClick={reset}>New video</button>
           </span>
@@ -203,7 +213,7 @@ export default function App() {
       {error && (
         <div className="error">
           <p style={{ whiteSpace: 'pre-line' }}>{error.msg}</p>
-          {error.retry && segments.current && <button onClick={() => runClips(segments.current!)}>Retry (transcript is cached)</button>}
+          {error.retry && segments.current && <button onClick={() => runClips(segments.current!, true)}>Retry (transcript is cached)</button>}
           {!error.retry && <button onClick={reset}>Try another video</button>}
         </div>
       )}
@@ -222,6 +232,7 @@ export default function App() {
             </div>
           )}
           {allErr && <p className="err">{allErr}</p>}
+          {answeredBy && <p className="note">Clips found by {answeredBy}</p>}
           <section className="grid">
             {clips.length === 0 && <p>No clips were found. Try a video with more spoken content.</p>}
             {clips.map((c, i) => <ClipCard key={i} rank={i + 1} clip={c} file={file!} url={url} fit={fit} locked={all !== null} onTrim={t => trim(i, t)} />)}

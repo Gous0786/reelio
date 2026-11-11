@@ -1,9 +1,20 @@
 import type { Clip, FindClipsOptions, Segment } from './types';
+import { getClips, putClips } from './cache';
 
 const MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const PROXY_URL = '/api/chat';
-const CHUNK_CHARS = 45000;
+const FALLBACK_CHARS = 45000; // chunk size for small-context models
+const OPENROUTER_MAX_CHARS = 150000; // cap per request on free models (slow/flaky with huge prompts)
+const CHARS_PER_TOKEN = 3; // conservative for timestamped transcript lines
+const PROMPT_VERSION = 'v3-gemini'; // bump when the prompt/output format changes: invalidates cached clip results
+// Gemini (tried first when a key is set): native generateContent, JSON mode, 1M-token context.
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
+const GEMINI_CHARS = 400000; // ~130k tokens: a 3-hour transcript (~110k chars) fits in one request
+const GEMINI_FIRST_TOKEN_MS = 30000; // no first token by then = give up and fall through
+const GEMINI_STALL_MS = 30000; // silence after the first token
+const GEMINI_TIMEOUT_MS = 180000;
 const MAX_ATTEMPTS = 6;
 const ATTEMPT_TIMEOUT_MS = 240000; // hard cap per model; streaming shows progress meanwhile
 const STALL_MS = 60000; // no bytes at all (not even keepalives) for this long = dead connection
@@ -17,7 +28,7 @@ const PREFERENCE = [
 // Tiny or slow-reasoning models that waste an attempt.
 const AVOID = /lfm-|lightning|nano|code/;
 
-interface ModelInfo { id: string; json: boolean }
+interface ModelInfo { id: string; json: boolean; ctx: number }
 let modelsCache: Promise<ModelInfo[]> | null = null;
 const deadModels = new Set<string>(); // 403/404 this session: never retry
 const GOOD_KEY = 'reelio_good_model'; // last free model that returned valid clips; tried first next time
@@ -36,7 +47,7 @@ function loadModels(): Promise<ModelInfo[]> {
         };
         const ids = (j.data ?? [])
           .filter(m => m.id.endsWith(':free') && (m.context_length ?? 0) >= 32000 && !AVOID.test(m.id))
-          .map(m => ({ id: m.id, json: !!m.supported_parameters?.includes('response_format') }))
+          .map(m => ({ id: m.id, json: !!m.supported_parameters?.includes('response_format'), ctx: m.context_length ?? 0 }))
           .sort((a, b) => rank(a.id) - rank(b.id));
         if (!ids.length) throw new Error('no free models available');
         return ids;
@@ -176,15 +187,146 @@ async function callModel(m: ModelInfo, prompt: string, opts: FindClipsOptions, l
   }
 }
 
-async function queryChunk(prompt: string, opts: FindClipsOptions, label: string): Promise<unknown[]> {
+// Characters of transcript a model can take in one request (reserves ~16k tokens for the answer + prompt overhead).
+const budget = (m: ModelInfo) => Math.min(OPENROUTER_MAX_CHARS, Math.max(0, (m.ctx - 17000) * CHARS_PER_TOKEN));
+
+// Remembered model first (stable sort: the rest keep their order).
+async function candidates(): Promise<ModelInfo[]> {
   const good = localStorage.getItem(GOOD_KEY);
-  const models = (await loadModels())
-    .filter(m => !deadModels.has(m.id))
-    .sort((a, b) => Number(b.id === good) - Number(a.id === good)) // stable: the rest keep their order
-    .slice(0, MAX_ATTEMPTS);
-  if (!models.length) throw new Error('no usable free models left this session');
+  return (await loadModels()).filter(m => !deadModels.has(m.id)).sort((a, b) => Number(b.id === good) - Number(a.id === good));
+}
+
+let geminiOffUntil = 0; // after a Gemini failure it is skipped until then (Infinity = bad key / daily quota: until reload)
+
+function describeGemini(status: number, body: string): string {
+  let msg = body.slice(0, 200);
+  try {
+    const e = (JSON.parse(body) as { error?: { message?: string; status?: string } }).error;
+    if (e) msg = `${e.status ? e.status + ': ' : ''}${(e.message ?? msg).replace(/https?:\/\/\S+/g, '').trim()}`;
+  } catch { /* not JSON */ }
+  return `HTTP ${status}: ${msg}`;
+}
+
+// One streamed Gemini request, no retries. Throws with a readable cause (and .status) on failure.
+async function callGemini(key: string, prompt: string, opts: FindClipsOptions, label: string): Promise<string> {
+  const ctrl = new AbortController();
+  const hard = setTimeout(() => ctrl.abort(new Error(`no answer within ${GEMINI_TIMEOUT_MS / 1000}s`)), GEMINI_TIMEOUT_MS);
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  const alive = (ms: number, why: string) => {
+    clearTimeout(stall);
+    stall = setTimeout(() => ctrl.abort(new Error(`${why} for ${ms / 1000}s`)), ms);
+  };
+  const t0 = Date.now();
+  try {
+    alive(GEMINI_FIRST_TOKEN_MS, 'no first token');
+    const res = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 16000 },
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) throw Object.assign(new Error(describeGemini(res.status, await res.text())), { status: res.status });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', content = '', finish = '', blocked = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue;
+        let j: { error?: { code?: number; message?: string; status?: string }; promptFeedback?: { blockReason?: string };
+          candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[] };
+        try { j = JSON.parse(line.slice(5)); } catch { continue; }
+        if (j.error) throw Object.assign(new Error(describeGemini(j.error.code ?? 200, line.slice(5))), { status: j.error.code });
+        if (j.promptFeedback?.blockReason) blocked = j.promptFeedback.blockReason;
+        const c = j.candidates?.[0];
+        for (const p of c?.content?.parts ?? []) if (p.text && !p.thought) content += p.text;
+        if (c?.finishReason) finish = c.finishReason;
+        if (content) alive(GEMINI_STALL_MS, 'stalled');
+      }
+      opts.onProgress?.(`${label}: Gemini ${GEMINI_MODEL} ${content ? `writing answer (${content.length} chars)` : 'reading transcript'}… ${Math.round((Date.now() - t0) / 1000)}s`);
+    }
+    if (!content.trim()) throw new Error(blocked ? `blocked by Gemini (${blocked})` : `empty answer (finishReason ${finish || 'none'})`);
+    if (finish && finish !== 'STOP') console.warn(`[reelio] Gemini finishReason ${finish}`);
+    return content;
+  } catch (e) {
+    if (ctrl.signal.aborted && ctrl.signal.reason instanceof Error) throw ctrl.signal.reason;
+    throw e;
+  } finally {
+    clearTimeout(hard);
+    clearTimeout(stall);
+  }
+}
+
+interface Answer { clips: unknown[]; by: string; note?: string }
+
+function chunkSegments(segs: Segment[], maxChars: number): Segment[][] {
+  const chunks: Segment[][] = [];
+  let cur: Segment[] = [];
+  let len = 0;
+  for (const s of segs) {
+    const n = formatLine(s).length + 1;
+    if (cur.length && len + n > maxChars) { chunks.push(cur); cur = []; len = 0; }
+    cur.push(s);
+    len += n;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
+
+// Gemini first (one attempt), then OpenRouter free models (remembered one first). Reports which one answered.
+async function queryChunk(segs: Segment[], ask: number, label: string, part: string | undefined, opts: FindClipsOptions, useGemini: boolean): Promise<Answer> {
+  const text = segs.map(formatLine).join('\n');
+  const prompt = buildPrompt(text, ask, part);
   const errors: string[] = [];
-  for (const m of models) {
+  let note: string | undefined;
+
+  if (useGemini && opts.geminiKey && Date.now() >= geminiOffUntil && text.length <= GEMINI_CHARS) {
+    opts.onProgress?.(`${label}: asking Gemini ${GEMINI_MODEL}…`);
+    const t0 = Date.now();
+    try {
+      const answer = await callGemini(opts.geminiKey, prompt, opts, label);
+      const clips = parseClips(answer);
+      if (clips) {
+        const secs = ((Date.now() - t0) / 1000).toFixed(1);
+        opts.onProgress?.(`${label}: answered by Gemini ${GEMINI_MODEL} (${secs}s)`);
+        console.info(`[reelio] clips answered by Gemini ${GEMINI_MODEL} in ${secs}s`);
+        return { clips, by: `Gemini · ${GEMINI_MODEL}` };
+      }
+      throw new Error(`answer was not valid clip JSON (${answer.length} chars, starts ${JSON.stringify(answer.slice(0, 60))}, ends ${JSON.stringify(answer.slice(-40))})`);
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      const msg = (e as Error).message;
+      geminiOffUntil = status === 400 || status === 401 || status === 403 || (status === 429 && /day|daily/i.test(msg))
+        ? Infinity : Date.now() + 60000;
+      note = `Gemini failed: ${msg.slice(0, 160)}`;
+      errors.push(`Gemini ${GEMINI_MODEL}: ${msg}`);
+      console.warn(`[reelio] Gemini ${GEMINI_MODEL} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${msg}`);
+      opts.onProgress?.(`${label}: Gemini failed (${msg.slice(0, 80)}), falling back to OpenRouter…`);
+    }
+  }
+
+  const fit = (await candidates()).filter(m => budget(m) >= text.length).slice(0, MAX_ATTEMPTS);
+  if (!fit.length && text.length > FALLBACK_CHARS) { // no free model takes this much at once: chunk as a last resort
+    const parts = chunkSegments(segs, FALLBACK_CHARS);
+    const clips: unknown[] = [];
+    let by = '';
+    for (let i = 0; i < parts.length; i++) {
+      const a = await queryChunk(parts[i], ask, `${label} (piece ${i + 1}/${parts.length})`, `piece ${i + 1} of ${parts.length}`, opts, false);
+      clips.push(...a.clips);
+      by = a.by;
+    }
+    return { clips, by, note };
+  }
+  if (!fit.length) throw new Error(`${label}: no usable free models left this session`);
+  for (const m of fit) {
     opts.onProgress?.(`${label}: asking ${m.id}…`);
     for (let noThink = true; ; noThink = false) {
       try {
@@ -193,7 +335,7 @@ async function queryChunk(prompt: string, opts: FindClipsOptions, label: string)
           if (clips.length) localStorage.setItem(GOOD_KEY, m.id);
           opts.onProgress?.(`${label}: answered by ${m.id}`);
           console.info(`[reelio] clips answered by ${m.id}`);
-          return clips;
+          return { clips, by: `OpenRouter · ${m.id}`, note };
         }
         errors.push(`${m.id}: answer was not valid clip JSON`);
         console.warn(`[reelio] ${m.id} failed: answer was not valid clip JSON`);
@@ -214,7 +356,7 @@ async function queryChunk(prompt: string, opts: FindClipsOptions, label: string)
       break;
     }
   }
-  throw new Error(`${label}: all ${models.length} models failed:\n${errors.map(e => `• ${e}`).join('\n')}`);
+  throw new Error(`${label}: all ${errors.length} attempts failed:\n${errors.map(e => `• ${e}`).join('\n')}`);
 }
 
 // Snaps each raw clip to segment boundaries, enforces 15-90s, drops overlaps, sorts and caps.
@@ -267,38 +409,55 @@ function validate(raw: unknown[], segs: Segment[], maxClips: number): Clip[] {
   return kept;
 }
 
+// Cheap non-cryptographic hash of the transcript text (cache key part).
+function hashText(t: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}-${t.length}`;
+}
+
 export async function findClips(segments: Segment[], opts: FindClipsOptions = {}): Promise<Clip[]> {
   const maxClips = opts.maxClips ?? 8;
   const segs = [...segments].sort((a, b) => a.start - b.start);
   if (!segs.length) return [];
 
-  const chunks: Segment[][] = [];
-  let cur: Segment[] = [];
-  let len = 0;
-  for (const s of segs) {
-    const line = formatLine(s);
-    if (cur.length && len + line.length > CHUNK_CHARS) {
-      chunks.push(cur);
-      cur = [];
-      len = 0;
+  const cacheKey = `${hashText(segs.map(formatLine).join('\n'))}|${PROMPT_VERSION}|${maxClips}`;
+  if (!opts.force) {
+    const hit = await getClips(cacheKey);
+    if (hit?.clips.length) {
+      opts.onProgress?.(`Clips loaded from cache (no request needed; originally ${hit.by})`);
+      opts.onAnswered?.(`cache (originally ${hit.by})`);
+      return hit.clips as Clip[];
     }
-    cur.push(s);
-    len += line.length + 1;
   }
-  if (cur.length) chunks.push(cur);
+
+  // Chunk to the context window of the model most likely to answer: Gemini, else the first OpenRouter candidate.
+  let chunkChars = FALLBACK_CHARS;
+  if (opts.geminiKey && Date.now() >= geminiOffUntil) chunkChars = GEMINI_CHARS;
+  else {
+    try { const first = (await candidates())[0]; if (first) chunkChars = Math.max(FALLBACK_CHARS, budget(first)); } catch { /* model list unavailable: queryChunk reports it */ }
+  }
+  const chunks = chunkSegments(segs, chunkChars);
 
   const ask = chunks.length === 1 ? maxClips : Math.min(maxClips, Math.ceil(maxClips / chunks.length) + 1);
   const raw: unknown[] = [];
+  const by = new Set<string>();
+  let note: string | undefined;
   let failures = 0;
   let lastErr: unknown;
   for (let i = 0; i < chunks.length; i++) {
     const multi = chunks.length > 1;
     const label = multi ? `Part ${i + 1}/${chunks.length}` : 'Analyzing transcript';
     opts.onProgress?.(`${label}…`);
-    const text = chunks[i].map(formatLine).join('\n');
-    const prompt = buildPrompt(text, ask, multi ? `part ${i + 1} of ${chunks.length}` : undefined);
     try {
-      raw.push(...(await queryChunk(prompt, opts, label)));
+      const a = await queryChunk(chunks[i], ask, label, multi ? `part ${i + 1} of ${chunks.length}` : undefined, opts, true);
+      raw.push(...a.clips);
+      by.add(a.by);
+      note ??= a.note;
     } catch (e) {
       if (e instanceof Fatal) throw e;
       failures++;
@@ -313,5 +472,8 @@ export async function findClips(segments: Segment[], opts: FindClipsOptions = {}
   opts.onProgress?.('Ranking clips…');
   const clips = validate(raw, segs, maxClips);
   opts.onProgress?.(`Found ${clips.length} clips`);
+  const answeredBy = [...by].join(' + ');
+  opts.onAnswered?.(note ? `${answeredBy} (${note})` : answeredBy);
+  if (clips.length && !failures) await putClips(cacheKey, { clips, by: answeredBy });
   return clips;
 }
