@@ -21,8 +21,9 @@ export function createTranscriber(model: WhisperModel, onDownload: (pct: number)
   const call = <T,>(msg: object, transfer: Transferable[] = []) =>
     new Promise<T>((resolve, reject) => { pending = { resolve, reject }; worker.postMessage(msg, transfer) })
 
-  return call<{ device: Device }>({ type: 'init', model }).then(({ device }) => ({
+  return call<{ device: Device; gpu: string }>({ type: 'init', model }).then(({ device, gpu }) => ({
     device,
+    gpu,
     run: (audio: Float32Array, offset: number) =>
       call<{ segments: Segment[] }>({ type: 'run', audio, offset }, [audio.buffer]).then(r => r.segments),
     close: () => worker.terminate(),

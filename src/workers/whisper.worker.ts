@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 // Pattern follows xenova/whisper-web: pipeline() in a worker, WebGPU if available else WASM.
-// Protocol: {type:'init', model} -> {type:'download', pct} ... {type:'ready', device}
+// Protocol: {type:'init', model} -> {type:'download', pct} ... {type:'ready', device, gpu}
 //           {type:'run', audio, offset} -> {type:'result', segments} | {type:'error', message, audio}
 import { pipeline, env } from '@huggingface/transformers'
 import type { Segment } from '../lib/types'
@@ -9,9 +9,11 @@ env.allowLocalModels = false
 const SR = 16000
 let asr: any
 
-async function hasWebGPU() {
-  try { return !!(await (self.navigator as any).gpu?.requestAdapter()) } catch { return false }
+// Ask for the discrete GPU. (On Windows, Chrome follows the per-app OS graphics setting.)
+async function gpuAdapter(): Promise<any> {
+  try { return (await (self.navigator as any).gpu?.requestAdapter({ powerPreference: 'high-performance' })) ?? null } catch { return null }
 }
+const gpuName = (i: any) => (i ? [i.vendor, i.architecture, i.description].filter(Boolean).join(' ') : '')
 
 async function init(model: string) {
   const files: Record<string, { loaded: number; total: number }> = {}
@@ -28,12 +30,20 @@ async function init(model: string) {
       dtype: device === 'webgpu' ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8',
       progress_callback,
     } as any)
-  let device: 'webgpu' | 'wasm' = (await hasWebGPU()) ? 'webgpu' : 'wasm'
+  const adapter = await gpuAdapter()
+  const ort = (env.backends.onnx as any).webgpu
+  if (ort) ort.powerPreference = 'high-performance'
+  let device: 'webgpu' | 'wasm' = adapter ? 'webgpu' : 'wasm'
   try { asr = await make(device) } catch (e) {
     if (device === 'wasm') throw e
     device = 'wasm'; asr = await make('wasm')
   }
-  self.postMessage({ type: 'ready', device })
+  let gpu = ''
+  if (device === 'webgpu') {
+    try { gpu = gpuName((await ort?.device)?.adapterInfo) } catch { /* older ORT: fall back to our adapter */ }
+    gpu ||= gpuName(adapter.info)
+  }
+  self.postMessage({ type: 'ready', device, gpu })
 }
 
 async function run(audio: Float32Array, offset: number) {

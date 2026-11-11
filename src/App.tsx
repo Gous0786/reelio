@@ -17,7 +17,7 @@ export default function App() {
   const [error, setError] = useState<{ msg: string; retry: boolean } | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('openrouter_key') ?? '')
-  const [model, setModel] = useState<WhisperModel>('onnx-community/whisper-base')
+  const [modelPref, setModelPref] = useState<'auto' | WhisperModel>('auto')
   const [warn, setWarn] = useState('')
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
   const unsupported = checkSupport()
@@ -42,9 +42,15 @@ export default function App() {
     try {
       setStage('model'); setStatus('Opening file…')
       audio = await openAudio(f)
-      setStatus('Downloading speech model… 0%')
-      tr = await createTranscriber(model, p => setStatus(`Downloading speech model… ${p}%`))
-      const device = tr.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU, slower)'
+      // tiny is ~2x faster; worth the accuracy loss only on long videos
+      const model: WhisperModel = modelPref !== 'auto' ? modelPref
+        : audio.duration > 1800 ? 'onnx-community/whisper-tiny' : 'onnx-community/whisper-base'
+      const mname = model.split('/')[1]
+      setStatus(`Downloading ${mname}… 0%`)
+      tr = await createTranscriber(model, p => setStatus(`Downloading ${mname}… ${p}%`))
+      const device = `${mname} · ` + (tr.device === 'webgpu' ? `WebGPU${tr.gpu ? ` (${tr.gpu})` : ''}` : 'WASM (CPU, slower)')
+      if (tr.device === 'webgpu' && /intel/i.test(tr.gpu))
+        setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
       setStage('transcribe')
       const segs: Segment[] = []
       const t0 = Date.now()
@@ -108,7 +114,8 @@ export default function App() {
               <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-… (empty = use /api/chat proxy)" />
             </label>
             <label>Speech model
-              <select value={model} onChange={e => setModel(e.target.value as WhisperModel)}>
+              <select value={modelPref} onChange={e => setModelPref(e.target.value as 'auto' | WhisperModel)}>
+                <option value="auto">auto (tiny for videos over 30 min, else base)</option>
                 <option value="onnx-community/whisper-base">whisper-base (better)</option>
                 <option value="onnx-community/whisper-tiny">whisper-tiny (faster)</option>
               </select>

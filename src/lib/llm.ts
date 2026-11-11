@@ -185,6 +185,7 @@ async function queryChunk(prompt: string, opts: FindClipsOptions, label: string)
           return clips;
         }
         errors.push(`${m.id}: answer was not valid clip JSON`);
+        console.warn(`[reelio] ${m.id} failed: answer was not valid clip JSON`);
       } catch (e) {
         const status = (e as { status?: number }).status;
         const msg = (e as Error).message;
