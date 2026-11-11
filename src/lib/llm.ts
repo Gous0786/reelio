@@ -72,8 +72,12 @@ function buildPrompt(text: string, n: number, part?: string): string {
 // Extracts the first JSON object (from first "{" to last "}"), which also drops code fences and <think> blocks.
 function parseClips(text: string): unknown[] | null {
   const body = text.replace(/<think>[\s\S]*?<\/think>/g, '');
-  const start = body.indexOf('{');
-  const end = body.lastIndexOf('}');
+  // Some models answer with a bare array [ {...}, ... ] instead of {"clips":[...]}: take whichever opens first.
+  const a = body.indexOf('[');
+  const o = body.indexOf('{');
+  const arr = a >= 0 && (o < 0 || a < o);
+  const start = arr ? a : o;
+  const end = body.lastIndexOf(arr ? ']' : '}');
   if (start < 0 || end <= start) return null;
   try {
     const obj = JSON.parse(body.slice(start, end + 1)) as { clips?: unknown };
