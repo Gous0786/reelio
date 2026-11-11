@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Clip, Segment } from './lib/types'
 import { findClips } from './lib/llm'
-import { checkSupport, exportClip, extractAudio } from './lib/media'
-import { transcribe, type WhisperModel } from './lib/transcribe'
+import { checkSupport, exportClip, openAudio } from './lib/media'
+import { createTranscriber, type WhisperModel } from './lib/transcribe'
 
-type Stage = 'idle' | 'audio' | 'transcribe' | 'clips' | 'done' | 'error'
-const STAGES: [Stage, string][] = [['audio', 'Extracting audio'], ['transcribe', 'Transcribing'], ['clips', 'Finding clips']]
+type Stage = 'idle' | 'model' | 'transcribe' | 'clips' | 'done' | 'error'
+const STAGES: [Stage, string][] = [['model', 'Loading speech model'], ['transcribe', 'Extracting audio & transcribing'], ['clips', 'Finding clips']]
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
+const dur = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h ` : '') + `${Math.floor((s % 3600) / 60)}m ${Math.round(s % 60)}s`
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null)
@@ -17,6 +18,7 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('openrouter_key') ?? '')
   const [model, setModel] = useState<WhisperModel>('onnx-community/whisper-base')
+  const [warn, setWarn] = useState('')
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
   const unsupported = checkSupport()
 
@@ -34,22 +36,54 @@ export default function App() {
   }
 
   const start = async (f: File) => {
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); segments.current = null
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); segments.current = null
+    let audio: Awaited<ReturnType<typeof openAudio>> | null = null
+    let tr: Awaited<ReturnType<typeof createTranscriber>> | null = null
     try {
-      setStage('audio'); setStatus('Extracting audio… 0%')
-      const audio = await extractAudio(f, p => setStatus(`Extracting audio… ${p}%`))
+      setStage('model'); setStatus('Opening file…')
+      audio = await openAudio(f)
+      setStatus('Downloading speech model… 0%')
+      tr = await createTranscriber(model, p => setStatus(`Downloading speech model… ${p}%`))
+      const device = tr.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU, slower)'
       setStage('transcribe')
-      const segs = await transcribe(audio, model, setStatus)
+      const segs: Segment[] = []
+      const t0 = Date.now()
+      let done = 0, skipped = 0
+      const report = () => {
+        const el = (Date.now() - t0) / 1000
+        const left = done > 0 ? ((audio!.duration - done) * el) / done : 0
+        setStatus(`Transcribing… ${Math.min(100, Math.round((done / audio!.duration) * 100))}% · ${dur(el)} elapsed${done > 0 ? ` · ~${dur(left)} left · ${(done / el).toFixed(1)}× realtime` : ''} · ${device}`)
+      }
+      report()
+      try {
+        for await (const sl of audio.slices()) {
+          const len = sl.audio.length / 16000
+          let buf = sl.audio
+          for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
+            try { segs.push(...(await tr.run(buf, sl.offset))); break } catch (e) {
+              const back = (e as { audio?: Float32Array }).audio
+              if (!back) throw e // worker died: cannot continue
+              if (attempt === 1) { skipped++; break }
+              buf = back
+            }
+          }
+          done = sl.offset + len; report()
+        }
+      } catch (e) {
+        if (!segs.length) throw e
+        setWarn(`Transcription stopped at ${fmt(done)} (${e instanceof Error ? e.message : e}); clips use the partial transcript.`)
+      }
+      if (skipped) setWarn(w => w || `${skipped} audio slice(s) failed and were skipped.`)
       if (!segs.length) throw new Error('No speech was detected in this video.')
       segments.current = segs
       await runClips(segs)
     } catch (e) {
       setError({ msg: e instanceof Error ? e.message : String(e), retry: false }); setStage('error')
-    }
+    } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null }
-  const busy = stage === 'audio' || stage === 'transcribe' || stage === 'clips'
+  const reset = () => { setWarn(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null }
+  const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const onFiles = (fl: FileList | null) => { const f = fl?.[0]; if (f && !busy) start(f) }
 
   return (
@@ -98,6 +132,8 @@ export default function App() {
           })}
         </ol>
       )}
+
+      {warn && <div className="error">{warn}</div>}
 
       {error && (
         <div className="error">

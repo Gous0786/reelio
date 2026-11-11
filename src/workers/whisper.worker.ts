@@ -1,19 +1,26 @@
 /// <reference lib="webworker" />
 // Pattern follows xenova/whisper-web: pipeline() in a worker, WebGPU if available else WASM.
+// Protocol: {type:'init', model} -> {type:'download', pct} ... {type:'ready', device}
+//           {type:'run', audio, offset} -> {type:'result', segments} | {type:'error', message, audio}
 import { pipeline, env } from '@huggingface/transformers'
 import type { Segment } from '../lib/types'
 
 env.allowLocalModels = false
-
 const SR = 16000
-const SLICE_S = 300 // transcribe in 5-minute slices so we can report real percent progress
-let cached: { model: string; asr: any } | null = null
+let asr: any
 
-async function load(model: string) {
-  if (cached?.model === model) return cached.asr
-  const gpu = !!(self.navigator as any).gpu
+async function hasWebGPU() {
+  try { return !!(await (self.navigator as any).gpu?.requestAdapter()) } catch { return false }
+}
+
+async function init(model: string) {
+  const files: Record<string, { loaded: number; total: number }> = {}
   const progress_callback = (p: any) => {
-    if (p.status === 'progress') self.postMessage({ type: 'download', pct: Math.round(p.progress ?? 0), file: p.file })
+    if (p.status !== 'progress' || !p.total) return
+    files[p.file] = { loaded: p.loaded, total: p.total }
+    const all = Object.values(files)
+    const pct = Math.round((all.reduce((a, f) => a + f.loaded, 0) / all.reduce((a, f) => a + f.total, 0)) * 100)
+    self.postMessage({ type: 'download', pct })
   }
   const make = (device: 'webgpu' | 'wasm') =>
     pipeline('automatic-speech-recognition', model, {
@@ -21,37 +28,35 @@ async function load(model: string) {
       dtype: device === 'webgpu' ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8',
       progress_callback,
     } as any)
-  let asr: any
-  try { asr = await make(gpu ? 'webgpu' : 'wasm') } catch (e) {
-    if (!gpu) throw e
-    asr = await make('wasm')
+  let device: 'webgpu' | 'wasm' = (await hasWebGPU()) ? 'webgpu' : 'wasm'
+  try { asr = await make(device) } catch (e) {
+    if (device === 'wasm') throw e
+    device = 'wasm'; asr = await make('wasm')
   }
-  cached = { model, asr }
-  return asr
+  self.postMessage({ type: 'ready', device })
 }
 
-self.onmessage = async (e: MessageEvent<{ audio: Float32Array; model: string }>) => {
+async function run(audio: Float32Array, offset: number) {
   try {
-    const { audio, model } = e.data
-    self.postMessage({ type: 'loading' })
-    const asr = await load(model)
+    const out = await asr(audio, { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' })
     const segments: Segment[] = []
-    const step = SLICE_S * SR
-    for (let i = 0; i < audio.length; i += step) {
-      const slice = audio.subarray(i, i + step)
-      const offset = i / SR
-      const out = await asr(slice, { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, language: null, task: 'transcribe' })
-      for (const c of (out.chunks ?? []) as { text: string; timestamp: [number, number | null] }[]) {
-        const text = c.text.trim()
-        if (!text) continue
-        const start = offset + (c.timestamp[0] ?? 0)
-        const end = offset + (c.timestamp[1] ?? Math.min(slice.length / SR, (c.timestamp[0] ?? 0) + 5))
-        segments.push({ start, end, text })
-      }
-      self.postMessage({ type: 'progress', pct: Math.min(100, Math.round(((i + step) / audio.length) * 100)) })
+    for (const c of (out.chunks ?? []) as { text: string; timestamp: [number, number | null] }[]) {
+      const text = c.text.trim()
+      if (!text) continue
+      const s = c.timestamp[0] ?? 0
+      const e = c.timestamp[1] ?? Math.min(audio.length / SR, s + 5)
+      segments.push({ start: offset + s, end: offset + e, text })
     }
-    self.postMessage({ type: 'done', segments })
+    self.postMessage({ type: 'result', segments })
   } catch (err) {
-    self.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+    // hand the buffer back so the caller can retry this slice without re-decoding
+    self.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err), audio }, [audio.buffer])
   }
+}
+
+self.onmessage = async (e: MessageEvent) => {
+  const m = e.data
+  if (m.type === 'init') {
+    try { await init(m.model) } catch (err) { self.postMessage({ type: 'fatal', message: err instanceof Error ? err.message : String(err) }) }
+  } else if (m.type === 'run') await run(m.audio, m.offset)
 }

@@ -4,14 +4,17 @@ const MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const PROXY_URL = '/api/chat';
 const CHUNK_CHARS = 45000;
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 6;
+const ATTEMPT_TIMEOUT_MS = 100000; // free reasoning models can stall; move on to the next one
 const MIN_LEN = 15;
 const MAX_LEN = 90;
 // Substrings of model ids, strongest general-purpose models first.
 const PREFERENCE = [
-  'llama-3.3-70b', 'qwen3', 'gemma-3-27b', 'mistral-small', 'nemotron',
-  'llama-3.1-405b', 'deepseek', 'gemma', 'qwen', 'llama', 'mistral',
+  'nemotron-3.5-super', 'gemma-4', 'llama-3.3-70b', 'qwen3', 'gemma-3-27b', 'mistral-small', 'nemotron-3-ultra',
+  'llama-3.1-405b', 'deepseek', 'gemma', 'qwen', 'llama', 'mistral', 'nemotron',
 ];
+// Tiny or slow-reasoning models that waste an attempt.
+const AVOID = /lfm-|lightning|nano|code/;
 
 let modelsCache: Promise<string[]> | null = null;
 
@@ -28,7 +31,7 @@ function loadModels(): Promise<string[]> {
           return i < 0 ? PREFERENCE.length : i;
         };
         const ids = (j.data ?? [])
-          .filter(m => m.id.endsWith(':free') && (m.context_length ?? 0) >= 32000)
+          .filter(m => m.id.endsWith(':free') && (m.context_length ?? 0) >= 32000 && !AVOID.test(m.id))
           .map(m => m.id)
           .sort((a, b) => rank(a) - rank(b));
         if (!ids.length) throw new Error('no free models available');
@@ -90,17 +93,22 @@ async function queryChunk(prompt: string, opts: FindClipsOptions, label: string)
           model,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.3,
-          max_tokens: 4000,
+          max_tokens: 10000, // reasoning models spend most of this thinking
+          reasoning: { effort: 'low' },
         }),
+        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
       });
       if (!res.ok) {
         lastErr = `${model} HTTP ${res.status}`;
         continue;
       }
-      const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+      const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
       const clips = parseClips(data.choices?.[0]?.message?.content ?? '');
-      if (clips) return clips;
-      lastErr = `${model} returned unparseable output`;
+      if (clips) {
+        opts.onProgress?.(`${label}: answered by ${model}`);
+        return clips;
+      }
+      lastErr = `${model} returned no parseable JSON`;
     } catch (e) {
       lastErr = `${model}: ${(e as Error).message}`;
     }
