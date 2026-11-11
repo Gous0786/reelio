@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
 import { Check, Clock, Copy, Download, Loader2, Quote } from 'lucide-react'
 import type { Clip } from '../lib/types'
 import { exportClip, type Fit } from '../lib/media'
@@ -20,6 +21,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
   const [copied, setCopied] = useState(false)
   const [dur, setDur] = useState(NaN) // source duration, from the player's metadata
   const [playhead, setPlayhead] = useState<number | null>(null)
+  const [full, setFull] = useState(false) // enlarged preview open
   const orig = useRef({ start: clip.start, end: clip.end })
   const rendering = useRef(false)
   const setRendering = (a: boolean) => { rendering.current = a; onRendering(a) }
@@ -62,7 +64,17 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
     <article className={`@container ${card} overflow-hidden`} aria-label={`Clip ${rank}: ${clip.title}`}>
       <div className="flex flex-col gap-5 p-4 @lg:flex-row @lg:p-5">
         <div className="mx-auto w-full max-w-65 shrink-0 @lg:mx-0 @lg:w-47.5">
-          <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead} />
+          <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead}
+            onExpand={() => { player.current?.pause(); setFull(true) }} />
+          <Dialog.Root open={full} onOpenChange={setFull}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/55 backdrop-blur-2xl" />
+              <Dialog.Content aria-describedby={undefined} className="animate-overlay-in fixed top-1/2 left-1/2 z-50 w-[min(94vw,calc(88vh*9/16))] -translate-x-1/2 -translate-y-1/2 focus:outline-none">
+                <Dialog.Title className="sr-only">Preview of clip {rank}: {clip.title}</Dialog.Title>
+                <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} autoPlay startAt={playhead ?? undefined} onClose={() => setFull(false)} />
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-3">
