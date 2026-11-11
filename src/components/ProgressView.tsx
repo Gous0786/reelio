@@ -20,9 +20,9 @@ const STEPS: { id: Stage; label: string; Icon: LucideIcon }[] = [
   { id: 'clips', label: 'Finding clips', Icon: Sparkles },
 ]
 
-function Stat({ Icon, label, value }: { Icon: LucideIcon; label: string; value: string }) {
+function Stat({ Icon, label, value, wide }: { Icon: LucideIcon; label: string; value: string; wide?: boolean }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/4 px-3 py-2.5">
+    <div className={clsx('flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/4 px-3 py-2.5', wide && 'col-span-2 lg:col-span-1')}>
       <Icon className="size-4 shrink-0 text-violet-300" aria-hidden />
       <div className="min-w-0">
         <p className="text-[11px] tracking-wide text-zinc-400 uppercase">{label}</p>
@@ -67,7 +67,7 @@ export default function ProgressView({ stage, status, info }: { stage: Stage; st
 
       <div className="mt-5 grid grid-cols-2 gap-2.5 lg:grid-cols-3">
         <Stat Icon={Layers} label="Model" value={info.model ?? dash} />
-        <Stat Icon={Cpu} label="Device" value={info.device ? `${info.device}${info.gpu ? ` · ${info.gpu}` : ''}` : dash} />
+        <Stat wide Icon={Cpu} label="Device" value={info.device ? `${info.device}${info.gpu ? ` · ${info.gpu}` : ''}` : dash} />
         <Stat Icon={Layers} label="Workers" value={info.workers ? String(info.workers) : dash} />
         <Stat Icon={Gauge} label="Speed" value={info.speed ? `${info.speed.toFixed(1)}× realtime` : dash} />
         <Stat Icon={Timer} label="Elapsed" value={info.elapsed !== null ? dur(info.elapsed) : dash} />

@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Slider from '@radix-ui/react-slider'
-import { Pause, Play, Volume2, VolumeX, Crop, Maximize2 } from 'lucide-react'
+import { Pause, Play, Volume2, VolumeX, Crop, Maximize2, ScanFace } from 'lucide-react'
 import type { Clip } from '../lib/types'
 import type { Fit } from '../lib/media'
 import { fmt } from '../lib/format'
+import type { Rect } from '../lib/facecam'
+import { previewStyles } from '../lib/facecamLayout'
 
 export interface PlayerHandle { seek: (t: number) => void; duration: number }
 
 /** 9:16 preview of one clip: the source file played between clip.start and clip.end (looping back to start),
  *  with play/pause, a clip-relative scrubber, time, mute, and the chosen fit mode shown as in the export. */
-export default function ClipPlayer({ url, clip, fit, onDuration, onTime, handle }: {
-  url: string; clip: Clip; fit: Fit
+export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, handle }: {
+  url: string; clip: Clip; fit: Fit; fc?: Rect | null
   onDuration?: (d: number) => void
   onTime?: (t: number) => void
   handle?: React.MutableRefObject<PlayerHandle | null>
@@ -22,6 +24,8 @@ export default function ClipPlayer({ url, clip, fit, onDuration, onTime, handle 
   const [muted, setMuted] = useState(false)
   const [t, setT] = useState(clip.start)
   const [scrubbing, setScrubbing] = useState(false)
+  const [aspect, setAspect] = useState(16 / 9)
+  const fcs = fc ? previewStyles(fc, aspect) : null // facecam layout: the bg ref is the facecam copy of the video
   const len = clip.end - clip.start
   const rel = Math.max(0, Math.min(len, t - clip.start))
 
@@ -48,15 +52,15 @@ export default function ClipPlayer({ url, clip, fit, onDuration, onTime, handle 
 
   return (
     <div className="group relative isolate aspect-9/16 w-full overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
-      {fit === 'blur' && (
-        <video ref={bg} className="pointer-events-none absolute inset-0 size-full scale-[1.4] object-cover blur-[22px]"
+      {(fit === 'blur' || fc) && (
+        <video ref={bg} className={fc ? 'pointer-events-none' : 'pointer-events-none absolute inset-0 size-full scale-[1.4] object-cover blur-[22px]'} style={fcs?.cam}
           src={`${url}#t=${firstStart.current}`} muted preload="metadata" playsInline />
       )}
       <video
         ref={vid}
-        className={`absolute inset-0 size-full ${fit === 'blur' ? 'object-contain' : 'object-cover'}`}
+        className={fc ? undefined : `absolute inset-0 size-full ${fit === 'blur' ? 'object-contain' : 'object-cover'}`} style={fcs?.game}
         src={`${url}#t=${firstStart.current}`} preload="metadata" playsInline muted={muted}
-        onLoadedMetadata={e => onDuration?.(e.currentTarget.duration)}
+        onLoadedMetadata={e => { onDuration?.(e.currentTarget.duration); setAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight || 16 / 9) }}
         onPlay={() => { setPlaying(true); bg.current?.play().catch(() => {}) }}
         onPause={() => { setPlaying(false); bg.current?.pause() }}
         onSeeked={e => sync(e.currentTarget)}
@@ -78,8 +82,8 @@ export default function ClipPlayer({ url, clip, fit, onDuration, onTime, handle 
       </button>
 
       <span className="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 ring-1 ring-white/15">
-        {fit === 'blur' ? <Maximize2 className="size-3" aria-hidden /> : <Crop className="size-3" aria-hidden />}
-        {fit === 'blur' ? 'Fit + blur' : 'Centre crop'}
+        {fc ? <ScanFace className="size-3" aria-hidden /> : fit === 'blur' ? <Maximize2 className="size-3" aria-hidden /> : <Crop className="size-3" aria-hidden />}
+        {fc ? 'Facecam stack' : fit === 'blur' ? 'Fit + blur' : 'Centre crop'}
       </span>
 
       {/* controls */}

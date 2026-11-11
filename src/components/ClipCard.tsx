@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Clock, Copy, Download, Loader2, Quote } from 'lucide-react'
 import type { Clip } from '../lib/types'
 import { exportClip, type Fit } from '../lib/media'
+import type { Rect } from '../lib/facecam'
 import { outName, save } from '../lib/format'
 import ClipPlayer, { type PlayerHandle } from './ClipPlayer'
 import TrimSlider from './TrimSlider'
+import { RankBreakdown } from './RankBreakdown'
 import { Alert, Button, Chip, Progress, card } from './ui'
 
-export default function ClipCard({ rank, clip, file, url, fit, locked, onTrim, onRendering }: {
-  rank: number; clip: Clip; file: File; url: string; fit: Fit; locked: boolean
+export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTrim, onRendering }: {
+  rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; locked: boolean
   onTrim: (t: { start: number; end: number }) => void
   onRendering: (active: boolean) => void
 }) {
@@ -45,7 +47,7 @@ export default function ClipCard({ rank, clip, file, url, fit, locked, onTrim, o
   }
   const download = async () => {
     setErr(''); setPct(0); setRendering(true)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct), outName(file, rank)) }
+    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc), outName(file, rank)) }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
     setPct(null); setRendering(false)
   }
@@ -60,7 +62,7 @@ export default function ClipCard({ rank, clip, file, url, fit, locked, onTrim, o
     <article className={`@container ${card} overflow-hidden`} aria-label={`Clip ${rank}: ${clip.title}`}>
       <div className="flex flex-col gap-5 p-4 @lg:flex-row @lg:p-5">
         <div className="mx-auto w-full max-w-65 shrink-0 @lg:mx-0 @lg:w-47.5">
-          <ClipPlayer url={url} clip={clip} fit={fit} handle={player} onDuration={setDur} onTime={setPlayhead} />
+          <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead} />
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -75,6 +77,8 @@ export default function ClipCard({ rank, clip, file, url, fit, locked, onTrim, o
             <p className="mt-1 flex gap-1.5 text-sm text-zinc-200 italic"><Quote className="mt-0.5 size-3.5 shrink-0 text-violet-300" aria-hidden /><span>{clip.hook}</span></p>
             <p className="mt-1.5 text-[13px] leading-relaxed text-zinc-400">{clip.reason}</p>
           </div>
+
+          {clip.rank && <RankBreakdown rank={clip.rank} />}
 
           <TrimSlider
             start={clip.start} end={clip.end} bounds={bounds} playhead={playhead}

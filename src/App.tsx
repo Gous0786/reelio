@@ -2,14 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import * as m from 'motion/react-m'
 import { AlertTriangle, Clapperboard, Crop, Database, Download, Maximize2, FilePlus2, FileVideo, RefreshCw, ScanText, Sparkles } from 'lucide-react'
-import type { Clip, Segment } from './lib/types'
+import type { Clip, Loud, Segment } from './lib/types'
 import { findClips } from './lib/llm'
+import { findRankedClips } from './lib/rank'
+import { LoudnessMeter } from './lib/signals'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
 import { createPool, type WhisperModel } from './lib/transcribe'
+import { detectFacecam, type FacecamSetting } from './lib/facecam'
+import { facecamKey, getFacecam, putFacecam } from './lib/facecamStore'
 import { dur, fmt, outName, save } from './lib/format'
 import Background from './components/Background'
 import ClipCard from './components/ClipCard'
+import FacecamPanel from './components/FacecamPanel'
 import DropZone from './components/DropZone'
 import { EmptyIllustration } from './components/Illustrations'
 import ProgressView, { NO_INFO, type RunInfo, type Stage } from './components/ProgressView'
@@ -36,7 +41,12 @@ export default function App() {
   const [all, setAll] = useState<{ i: number; n: number; p: number } | null>(null) // "download all" progress
   const [allErr, setAllErr] = useState('')
   const [renders, setRenders] = useState(0) // single-clip exports in flight
+  const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
+  const [fc, setFc] = useState<FacecamSetting | null>(null) // facecam setting for the current video
+  const [fcBusy, setFcBusy] = useState(false)
+  const fcAbort = useRef<AbortController | null>(null)
+  const fcRect = fc?.enabled ? fc.rect : null // set = the stacked facecam layout is on
   const unsupported = checkSupport()
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
@@ -47,18 +57,37 @@ export default function App() {
   const runClips = async (segs: Segment[], force = false) => {
     setStage('clips'); setError(null); setAnsweredBy(''); setStatus('Asking the LLM for the best moments…')
     try {
-      setClips(await findClips(segs, {
+      const o = {
         apiKey: apiKey.trim() || undefined, geminiKey: geminiKey.trim() || undefined, force, maxClips: 8,
         onProgress: setStatus, onAnswered: setAnsweredBy,
-      }))
+      }
+      setClips(await (loud.current ? findRankedClips(segs, loud.current, o) : findClips(segs, o)))
       setStage('done')
     } catch (e) {
       setError({ msg: `Finding clips failed: ${e instanceof Error ? e.message : e}`, retry: true }); setStage('error')
     }
   }
 
+  // Facecam: restore the saved setting, else detect (runs beside transcription; failure just means "none").
+  const runFacecam = async (f: File) => {
+    fcAbort.current?.abort()
+    const ctl = fcAbort.current = new AbortController()
+    setFc(null); setFcBusy(true)
+    const key = facecamKey(f)
+    let s = await getFacecam(key)
+    if (!s) {
+      const r = await detectFacecam(f, ctl.signal)
+      s = { rect: r?.rect ?? null, enabled: !!r, confidence: r?.confidence ?? 0, detected: !!r }
+      if (r !== undefined && !ctl.signal.aborted) putFacecam(key, s)
+    }
+    if (ctl.signal.aborted) return
+    setFc(s); setFcBusy(false)
+  }
+  const setFacecam = (s: FacecamSetting) => { setFc(s); if (file) putFacecam(facecamKey(file), s) }
+
   const start = async (f: File, force = false) => {
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setInfo(NO_INFO)
+    void runFacecam(f)
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; loud.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
@@ -71,7 +100,7 @@ export default function App() {
       if (force) await delTranscript(key)
       else {
         const hit = await getTranscript(key)
-        if (hit?.length) { segments.current = hit; setCached(true); await runClips(hit); return }
+        if (hit?.segs.length) { segments.current = hit.segs; loud.current = hit.loud; setCached(true); await runClips(hit.segs); return }
       }
       setStatus(`Downloading ${mname}… 0%`)
       tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => { setStatus(`Downloading ${mname}… ${p}%`); setInfo(i => ({ ...i, download: p })) })
@@ -82,6 +111,7 @@ export default function App() {
         setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
       setStage('transcribe')
       const segs: Segment[] = []
+      const meter = new LoudnessMeter()
       const t0 = Date.now()
       let done = 0, skipped = 0, partial = false
       const report = () => {
@@ -100,6 +130,7 @@ export default function App() {
           const { value: sl, done: end } = await it.next()
           if (end) return
           const len = sl.audio.length / 16000
+          meter.add(sl.audio, sl.offset) // before the buffer is handed to the worker
           let buf = sl.audio
           try {
             for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
@@ -124,21 +155,22 @@ export default function App() {
       if (skipped) setWarn(w => w || `${skipped} audio slice(s) failed and were skipped.`)
       if (!segs.length) throw new Error('No speech was detected in this video.')
       segments.current = segs
-      if (!partial && !skipped) await putTranscript(key, segs)
+      loud.current = meter.finish()
+      if (!partial && !skipped) await putTranscript(key, { segs, loud: loud.current })
       await runClips(segs, force)
     } catch (e) {
       setError({ msg: e instanceof Error ? e.message : String(e), retry: false }); setStage('error')
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; loud.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
     setAllErr('')
     for (let i = 0; i < clips.length; i++) {
       try {
-        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }))
+        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }), fcRect)
         save(blob, outName(file!, i + 1))
       } catch (e) { setAllErr(`Clip ${i + 1}: ${e instanceof Error ? e.message : e}`); break }
     }
@@ -187,7 +219,7 @@ export default function App() {
                       <Chip>{(file.size / 1048576).toFixed(file.size > 1e9 ? 0 : 1)} MB</Chip>
                       {stage === 'done' && <Chip tone="accent"><Sparkles className="size-3" aria-hidden />{clips.length} clip{clips.length === 1 ? '' : 's'}</Chip>}
                       {cached && stage !== 'model' && <Chip tone="good"><Database className="size-3" aria-hidden />Transcript from cache</Chip>}
-                      {answeredBy && stage === 'done' && <Chip>via {answeredBy}</Chip>}
+                      {answeredBy && stage === 'done' && <Chip className="max-w-full"><span className="truncate" title={answeredBy}>via {answeredBy}</span></Chip>}
                     </div>
                   </div>
                 </div>
@@ -202,6 +234,8 @@ export default function App() {
                 </div>
               </m.section>
             )}
+
+            {file && stage !== 'idle' && <FacecamPanel url={url} setting={fc} detecting={fcBusy} onChange={setFacecam} />}
 
             {busy && (
               <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -240,7 +274,8 @@ export default function App() {
                   <section className={`${card} flex flex-col gap-3 p-3.5 sm:flex-row sm:items-center sm:justify-between sm:p-4`} aria-label="Export options">
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="text-sm font-medium text-zinc-200">Framing</span>
-                      <Segmented label="Framing" value={fit} onChange={setFit} options={[
+                      {fcRect && <Chip tone="accent">Facecam layout is on</Chip>}
+                      <Segmented label="Framing" value={fcRect ? 'cover' : fit} onChange={setFit} disabled={!!fcRect} options={[
                         { value: 'cover', label: <><Crop className="size-3.5" />Centre crop</>, hint: 'Fill the 9:16 frame' },
                         { value: 'blur', label: <><Maximize2 className="size-3.5" />Fit + blur</>, hint: 'Whole picture over a blurred background' },
                       ]} />
@@ -274,7 +309,7 @@ export default function App() {
                 <section className="grid gap-5 lg:grid-cols-2" aria-label="Clips">
                   {clips.map((c, i) => (
                     <m.div key={i} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 5) * 0.05, duration: 0.3 }}>
-                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fit} locked={all !== null}
+                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} locked={all !== null}
                         onTrim={t => trim(i, t)} onRendering={a => setRenders(n => Math.max(0, n + (a ? 1 : -1)))} />
                     </m.div>
                   ))}
