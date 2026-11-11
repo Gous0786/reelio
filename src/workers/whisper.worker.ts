@@ -46,13 +46,41 @@ async function init(model: string) {
   self.postMessage({ type: 'ready', device, gpu })
 }
 
+// Loop guard (Whisper repeats itself on music/noise and gets slower):
+// 1) skip slices with no audible 1 s window, 2) cap tokens per 30 s chunk and forbid repeated 5-grams,
+// 3) drop degenerate / third-in-a-row identical segments.
+const SILENCE_RMS = 0.003
+function silent(a: Float32Array) {
+  for (let i = 0; i < a.length; i += SR) {
+    let e = 0, n = 0
+    for (let j = i; j < Math.min(i + SR, a.length); j += 4, n++) e += a[j] * a[j]
+    if (n && Math.sqrt(e / n) >= SILENCE_RMS) return false
+  }
+  return true
+}
+const recent: string[] = [] // normalized text of the last kept segments (across slices)
+const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim()
+function repeated(n: string) {
+  if (!n) return true // only music notes / punctuation
+  const w = n.split(' ')
+  if (w.length >= 8 && new Set(w).size / w.length < 0.3) return true // "the the the the ..."
+  const [a, b] = recent.slice(-2)
+  return n === a && n === b
+}
+
 async function run(audio: Float32Array, offset: number) {
   try {
-    const out = await asr(audio, { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' })
+    if (silent(audio)) { self.postMessage({ type: 'result', segments: [] }); return }
+    const out = await asr(audio, {
+      return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
+      max_new_tokens: 224, no_repeat_ngram_size: 5,
+    })
     const segments: Segment[] = []
     for (const c of (out.chunks ?? []) as { text: string; timestamp: [number, number | null] }[]) {
       const text = c.text.trim()
-      if (!text) continue
+      const n = norm(text)
+      if (repeated(n)) continue
+      recent.push(n); if (recent.length > 2) recent.shift()
       const s = c.timestamp[0] ?? 0
       const e = c.timestamp[1] ?? Math.min(audio.length / SR, s + 5)
       segments.push({ start: offset + s, end: offset + e, text })

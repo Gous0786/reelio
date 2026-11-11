@@ -1,5 +1,5 @@
 import {
-  ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, AudioBufferSink,
+  ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, AudioBufferSink, type VideoSample,
 } from 'mediabunny'
 
 export const SAMPLE_RATE = 16000
@@ -65,8 +65,30 @@ export async function openAudio(file: File) {
   } catch (e) { close(); throw e }
 }
 
-/** Render [start, end] of the original file as a 720x1280 center-cropped H.264/AAC MP4. */
-export async function exportClip(file: File, start: number, end: number, onProgress: (pct: number) => void): Promise<Blob> {
+export type Fit = 'cover' | 'blur'
+const OW = 720, OH = 1280
+
+/** Per-frame compositor for 'blur': whole frame scaled to width over a blurred, zoomed (cover) copy of itself.
+ *  The blur is cheap: draw the frame into a tiny canvas (with a small blur) and upscale it. */
+function blurComposer() {
+  const out = new OffscreenCanvas(OW, OH), ctx = out.getContext('2d')!
+  const tiny = new OffscreenCanvas(90, 160), tctx = tiny.getContext('2d')!
+  tctx.filter = 'blur(2px)'
+  ctx.imageSmoothingQuality = 'high'
+  return (s: VideoSample) => {
+    const sw = s.displayWidth, sh = s.displayHeight
+    const k = Math.max(tiny.width / sw, tiny.height / sh)
+    s.draw(tctx, (tiny.width - sw * k) / 2, (tiny.height - sh * k) / 2, sw * k, sh * k)
+    ctx.drawImage(tiny, 0, 0, OW, OH)
+    const fh = (sh * OW) / sw
+    s.draw(ctx, 0, (OH - fh) / 2, OW, fh)
+    return out
+  }
+}
+
+/** Render [start, end] of the original file as a 720x1280 H.264/AAC MP4: centre-cropped ('cover') or
+ *  whole frame over a blurred copy of itself ('blur'). */
+export async function exportClip(file: File, start: number, end: number, fit: Fit, onProgress: (pct: number) => void): Promise<Blob> {
   const input = openInput(file)
   try {
     const vt = await input.getPrimaryVideoTrack()
@@ -78,11 +100,13 @@ export async function exportClip(file: File, start: number, end: number, onProgr
     const conv = await Conversion.init({
       input, output,
       trim: { start, end },
-      video: {
-        codec: 'avc',
-        crop: { left: Math.floor((w - cropW) / 2), top: Math.floor((h - cropH) / 2), width: cropW, height: cropH },
-        width: 720, height: 1280, fit: 'fill',
-      },
+      video: fit === 'blur'
+        ? { codec: 'avc', process: blurComposer(), processedWidth: OW, processedHeight: OH }
+        : {
+          codec: 'avc',
+          crop: { left: Math.floor((w - cropW) / 2), top: Math.floor((h - cropH) / 2), width: cropW, height: cropH },
+          width: OW, height: OH, fit: 'fill',
+        },
       audio: { codec: 'aac' },
     })
     if (!conv.isValid) throw new Error('This video cannot be exported in your browser (unsupported codec).')

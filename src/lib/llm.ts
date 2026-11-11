@@ -20,6 +20,7 @@ const AVOID = /lfm-|lightning|nano|code/;
 interface ModelInfo { id: string; json: boolean }
 let modelsCache: Promise<ModelInfo[]> | null = null;
 const deadModels = new Set<string>(); // 403/404 this session: never retry
+const GOOD_KEY = 'reelio_good_model'; // last free model that returned valid clips; tried first next time
 
 function loadModels(): Promise<ModelInfo[]> {
   if (!modelsCache) {
@@ -63,7 +64,8 @@ function buildPrompt(text: string, n: number, part?: string): string {
     '- be a self-contained moment, not a fragment.',
     'Score each clip 0-100 for virality: hook strength, emotional payoff, standalone clarity, shareability.',
     'Reply with strict JSON only, no prose and no code fences:',
-    '{"clips":[{"start":0.0,"end":0.0,"title":"","hook":"","reason":"","score":0}]}',
+    'For each clip also write "caption" (a short engaging post caption, under 150 characters) and "hashtags" (3-5 relevant hashtags, each starting with #).',
+    '{"clips":[{"start":0.0,"end":0.0,"title":"","hook":"","reason":"","score":0,"caption":"","hashtags":["#"]}]}',
   ].join('\n');
 }
 
@@ -171,7 +173,11 @@ async function callModel(m: ModelInfo, prompt: string, opts: FindClipsOptions, l
 }
 
 async function queryChunk(prompt: string, opts: FindClipsOptions, label: string): Promise<unknown[]> {
-  const models = (await loadModels()).filter(m => !deadModels.has(m.id)).slice(0, MAX_ATTEMPTS);
+  const good = localStorage.getItem(GOOD_KEY);
+  const models = (await loadModels())
+    .filter(m => !deadModels.has(m.id))
+    .sort((a, b) => Number(b.id === good) - Number(a.id === good)) // stable: the rest keep their order
+    .slice(0, MAX_ATTEMPTS);
   if (!models.length) throw new Error('no usable free models left this session');
   const errors: string[] = [];
   for (const m of models) {
@@ -180,6 +186,7 @@ async function queryChunk(prompt: string, opts: FindClipsOptions, label: string)
       try {
         const clips = parseClips(await callModel(m, prompt, opts, label, noThink));
         if (clips) {
+          if (clips.length) localStorage.setItem(GOOD_KEY, m.id);
           opts.onProgress?.(`${label}: answered by ${m.id}`);
           console.info(`[reelio] clips answered by ${m.id}`);
           return clips;
@@ -227,7 +234,13 @@ function validate(raw: unknown[], segs: Segment[], maxClips: number): Clip[] {
     if (!window.length) continue;
     const e = nearest(window, re);
     const score = Math.max(0, Math.min(100, Math.round(Number(c.score) || 0)));
+    const tags = Array.isArray(c.hashtags)
+      ? c.hashtags.map(t => String(t).trim().replace(/\s+/g, '')).filter(t => t.replace('#', '')).map(t => (t.startsWith('#') ? t : '#' + t)).slice(0, 5)
+      : [];
+    const caption = typeof c.caption === 'string' ? c.caption.trim() : '';
     clips.push({
+      ...(caption ? { caption } : {}),
+      ...(tags.length ? { hashtags: tags } : {}),
       start: s,
       end: e,
       title: String(c.title ?? ''),
