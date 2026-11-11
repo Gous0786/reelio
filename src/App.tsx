@@ -7,6 +7,10 @@ import { RankBreakdown } from './RankBreakdown'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
 import { createPool, type WhisperModel } from './lib/transcribe'
+import { detectFacecam, type FacecamSetting, type Rect } from './lib/facecam'
+import { facecamKey, getFacecam, putFacecam } from './lib/facecamStore'
+import { previewStyles } from './lib/facecamLayout'
+import FacecamPanel from './components/FacecamPanel'
 
 type Stage = 'idle' | 'model' | 'transcribe' | 'clips' | 'done' | 'error'
 const STAGES: [Stage, string][] = [['model', 'Loading speech model'], ['transcribe', 'Extracting audio & transcribing'], ['clips', 'Finding clips']]
@@ -41,6 +45,10 @@ export default function App() {
   const [allErr, setAllErr] = useState('')
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
+  const [fc, setFc] = useState<FacecamSetting | null>(null) // facecam setting for the current video
+  const [fcBusy, setFcBusy] = useState(false)
+  const fcAbort = useRef<AbortController | null>(null)
+  const fcRect = fc?.enabled ? fc.rect : null // set = the stacked facecam layout is on
   const unsupported = checkSupport()
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
@@ -62,7 +70,25 @@ export default function App() {
     }
   }
 
+  // Facecam: restore the saved setting, else detect (runs beside transcription; failure just means "none").
+  const runFacecam = async (f: File) => {
+    fcAbort.current?.abort()
+    const ctl = fcAbort.current = new AbortController()
+    setFc(null); setFcBusy(true)
+    const key = facecamKey(f)
+    let s = await getFacecam(key)
+    if (!s) {
+      const r = await detectFacecam(f, ctl.signal)
+      s = { rect: r?.rect ?? null, enabled: !!r, confidence: r?.confidence ?? 0, detected: !!r }
+      if (r !== undefined && !ctl.signal.aborted) putFacecam(key, s)
+    }
+    if (ctl.signal.aborted) return
+    setFc(s); setFcBusy(false)
+  }
+  const setFacecam = (s: FacecamSetting) => { setFc(s); if (file) putFacecam(facecamKey(file), s) }
+
   const start = async (f: File, force = false) => {
+    void runFacecam(f)
     setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; loud.current = null
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
@@ -136,7 +162,7 @@ export default function App() {
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null; loud.current = null }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); segments.current = null; loud.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
@@ -144,7 +170,7 @@ export default function App() {
     for (let i = 0; i < clips.length; i++) {
       try {
         const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p =>
-          setAll(`Rendering clip ${i + 1}/${clips.length} · ${p}% · overall ${Math.round(((i + p / 100) / clips.length) * 100)}%`))
+          setAll(`Rendering clip ${i + 1}/${clips.length} · ${p}% · overall ${Math.round(((i + p / 100) / clips.length) * 100)}%`), fcRect)
         save(blob, outName(file!, i + 1))
       } catch (e) { setAllErr(`Clip ${i + 1}: ${e instanceof Error ? e.message : e}`); break }
     }
@@ -206,6 +232,8 @@ export default function App() {
         </div>
       )}
 
+      {file && stage !== 'idle' && <FacecamPanel url={url} setting={fc} detecting={fcBusy} onChange={setFacecam} />}
+
       {busy && (
         <ol className="stages">
           {STAGES.map(([s, label], i) => {
@@ -231,7 +259,7 @@ export default function App() {
           {clips.length > 0 && (
             <div className="toolbar">
               <label>Framing
-                <select value={fit} onChange={e => setFit(e.target.value as Fit)}>
+                <select value={fit} disabled={!!fcRect} title={fcRect ? 'Facecam layout is on' : undefined} onChange={e => setFit(e.target.value as Fit)}>
                   <option value="cover">Centre crop</option>
                   <option value="blur">Fit with blurred background</option>
                 </select>
@@ -243,7 +271,7 @@ export default function App() {
           {answeredBy && <p className="note">Clips found by {answeredBy}</p>}
           <section className="grid">
             {clips.length === 0 && <p>No clips were found. Try a video with more spoken content.</p>}
-            {clips.map((c, i) => <ClipCard key={i} rank={i + 1} clip={c} file={file!} url={url} fit={fit} locked={all !== null} onTrim={t => trim(i, t)} />)}
+            {clips.map((c, i) => <ClipCard key={i} rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} locked={all !== null} onTrim={t => trim(i, t)} />)}
           </section>
         </>
       )}
@@ -251,8 +279,8 @@ export default function App() {
   )
 }
 
-function ClipCard({ rank, clip, file, url, fit, locked, onTrim }: {
-  rank: number; clip: Clip; file: File; url: string; fit: Fit; locked: boolean; onTrim: (t: { start: number; end: number }) => void
+function ClipCard({ rank, clip, file, url, fit, fc, locked, onTrim }: {
+  rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; locked: boolean; onTrim: (t: { start: number; end: number }) => void
 }) {
   const vid = useRef<HTMLVideoElement>(null)
   const bg = useRef<HTMLVideoElement>(null) // blurred copy behind the video in 'blur' mode, kept in sync
@@ -260,6 +288,8 @@ function ClipCard({ rank, clip, file, url, fit, locked, onTrim }: {
   const [pct, setPct] = useState<number | null>(null)
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState(false)
+  const [aspect, setAspect] = useState(16 / 9)
+  const fcs = fc ? previewStyles(fc, aspect) : null // facecam layout: the bg ref is the facecam copy of the video
 
   const toggle = () => {
     const v = vid.current!
@@ -277,7 +307,7 @@ function ClipCard({ rank, clip, file, url, fit, locked, onTrim }: {
   }
   const download = async () => {
     setErr(''); setPct(0)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct), outName(file, rank)) }
+    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc), outName(file, rank)) }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
     setPct(null)
   }
@@ -299,8 +329,9 @@ function ClipCard({ rank, clip, file, url, fit, locked, onTrim }: {
   return (
     <article className="card">
       <div className={`phone ${fit}`} onClick={toggle}>
-        {fit === 'blur' && <video ref={bg} className="bgv" src={`${url}#t=${clip.start}`} muted preload="metadata" playsInline />}
-        <video ref={vid} className="main" src={`${url}#t=${clip.start}`} preload="metadata" playsInline
+        {(fit === 'blur' || fc) && <video ref={bg} className={fc ? undefined : 'bgv'} style={fcs?.cam} src={`${url}#t=${clip.start}`} muted preload="metadata" playsInline />}
+        <video ref={vid} className="main" style={fcs?.game} src={`${url}#t=${clip.start}`} preload="metadata" playsInline
+          onLoadedMetadata={e => setAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight || 16 / 9)}
           onPlay={() => { setPlaying(true); bg.current?.play().catch(() => {}) }}
           onPause={() => { setPlaying(false); bg.current?.pause() }}
           onSeeked={e => sync(e.currentTarget)}

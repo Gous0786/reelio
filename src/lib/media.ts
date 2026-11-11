@@ -1,6 +1,8 @@
 import {
   ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, AudioBufferSink, type VideoSample,
 } from 'mediabunny'
+import type { Rect } from './facecam'
+import { facecamComposer } from './facecamLayout'
 
 export const SAMPLE_RATE = 16000
 
@@ -87,8 +89,8 @@ function blurComposer() {
 }
 
 /** Render [start, end] of the original file as a 720x1280 H.264/AAC MP4: centre-cropped ('cover') or
- *  whole frame over a blurred copy of itself ('blur'). */
-export async function exportClip(file: File, start: number, end: number, fit: Fit, onProgress: (pct: number) => void): Promise<Blob> {
+ *  whole frame over a blurred copy of itself ('blur'), or the facecam layout when a facecam rectangle is given. */
+export async function exportClip(file: File, start: number, end: number, fit: Fit, onProgress: (pct: number) => void, facecam?: Rect | null): Promise<Blob> {
   const input = openInput(file)
   try {
     const vt = await input.getPrimaryVideoTrack()
@@ -100,7 +102,8 @@ export async function exportClip(file: File, start: number, end: number, fit: Fi
     const conv = await Conversion.init({
       input, output,
       trim: { start, end },
-      video: fit === 'blur'
+      video: facecam ? { codec: 'avc', process: facecamComposer(facecam), processedWidth: OW, processedHeight: OH }
+        : fit === 'blur'
         ? { codec: 'avc', process: blurComposer(), processedWidth: OW, processedHeight: OH }
         : {
           codec: 'avc',

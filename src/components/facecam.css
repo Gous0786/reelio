@@ -1,0 +1,15 @@
+.fcp { margin: 0 0 16px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.fcp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.fcp-head label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.fcp-head input[type=checkbox] { width: auto; margin: 0; }
+.fcp-head small { color: var(--muted); }
+.fcp-head button { padding: 4px 12px; font-size: 13px; }
+.fcp-stage { position: relative; margin-top: 10px; max-width: 560px; line-height: 0; touch-action: none; user-select: none; }
+.fcp-stage video { width: 100%; display: block; border-radius: 8px; background: #000; }
+.fcp-box { position: absolute; border: 2px solid #5fd38d; background: #5fd38d22; cursor: move; line-height: 0; }
+.fcp-box.off { border-color: var(--muted); background: #8b93a722; }
+.fcp-box i { position: absolute; width: 14px; height: 14px; background: #5fd38d; border-radius: 3px; }
+.fcp-box.off i { background: var(--muted); }
+.fcp-box i.tl { left: -8px; top: -8px; cursor: nwse-resize; } .fcp-box i.br { right: -8px; bottom: -8px; cursor: nwse-resize; }
+.fcp-box i.tr { right: -8px; top: -8px; cursor: nesw-resize; } .fcp-box i.bl { left: -8px; bottom: -8px; cursor: nesw-resize; }
+.fcp-scrub { max-width: 560px; margin-top: 8px; padding: 0; }
