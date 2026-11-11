@@ -137,7 +137,7 @@ export default function App() {
 
       {error && (
         <div className="error">
-          <p>{error.msg}</p>
+          <p style={{ whiteSpace: 'pre-line' }}>{error.msg}</p>
           {error.retry && segments.current && <button onClick={() => runClips(segments.current!)}>Retry (transcript is cached)</button>}
           {!error.retry && <button onClick={reset}>Try another video</button>}
         </div>

@@ -5,7 +5,8 @@ const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const PROXY_URL = '/api/chat';
 const CHUNK_CHARS = 45000;
 const MAX_ATTEMPTS = 6;
-const ATTEMPT_TIMEOUT_MS = 100000; // free reasoning models can stall; move on to the next one
+const ATTEMPT_TIMEOUT_MS = 240000; // hard cap per model; streaming shows progress meanwhile
+const STALL_MS = 60000; // no bytes at all (not even keepalives) for this long = dead connection
 const MIN_LEN = 15;
 const MAX_LEN = 90;
 // Substrings of model ids, strongest general-purpose models first.
@@ -16,24 +17,26 @@ const PREFERENCE = [
 // Tiny or slow-reasoning models that waste an attempt.
 const AVOID = /lfm-|lightning|nano|code/;
 
-let modelsCache: Promise<string[]> | null = null;
+interface ModelInfo { id: string; json: boolean }
+let modelsCache: Promise<ModelInfo[]> | null = null;
+const deadModels = new Set<string>(); // 403/404 this session: never retry
 
-function loadModels(): Promise<string[]> {
+function loadModels(): Promise<ModelInfo[]> {
   if (!modelsCache) {
     modelsCache = fetch(MODELS_URL)
       .then(r => {
         if (!r.ok) throw new Error(`model list HTTP ${r.status}`);
         return r.json();
       })
-      .then((j: { data?: { id: string; context_length?: number }[] }) => {
+      .then((j: { data?: { id: string; context_length?: number; supported_parameters?: string[] }[] }) => {
         const rank = (id: string) => {
           const i = PREFERENCE.findIndex(p => id.includes(p));
           return i < 0 ? PREFERENCE.length : i;
         };
         const ids = (j.data ?? [])
           .filter(m => m.id.endsWith(':free') && (m.context_length ?? 0) >= 32000 && !AVOID.test(m.id))
-          .map(m => m.id)
-          .sort((a, b) => rank(a) - rank(b));
+          .map(m => ({ id: m.id, json: !!m.supported_parameters?.includes('response_format') }))
+          .sort((a, b) => rank(a.id) - rank(b.id));
         if (!ids.length) throw new Error('no free models available');
         return ids;
       })
@@ -46,7 +49,7 @@ function loadModels(): Promise<string[]> {
 }
 
 const formatLine = (s: Segment) =>
-  `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text.replace(/\s+/g, ' ').trim()}`;
+  `[${Math.round(s.start)}-${Math.round(s.end)}] ${s.text.replace(/\s+/g, ' ').trim()}`;
 
 function buildPrompt(text: string, n: number, part?: string): string {
   return [
@@ -72,48 +75,134 @@ function parseClips(text: string): unknown[] | null {
   if (start < 0 || end <= start) return null;
   try {
     const obj = JSON.parse(body.slice(start, end + 1)) as { clips?: unknown };
+    if (Array.isArray(obj)) return obj;
     return Array.isArray(obj.clips) ? obj.clips : null;
   } catch {
     return null;
   }
 }
 
-async function queryChunk(prompt: string, opts: FindClipsOptions, label: string): Promise<unknown[]> {
-  const models = await loadModels();
+class Fatal extends Error {} // quota/auth problems: trying other models cannot help
+
+// OpenRouter errors look like {error:{message, code, metadata:{raw, provider_name}}}; surface the real cause.
+function describeError(status: number, body: string): string {
+  let msg = body.slice(0, 200);
+  try {
+    const e = (JSON.parse(body) as { error?: { message?: string; metadata?: { raw?: unknown; provider_name?: string } } }).error;
+    if (e) {
+      const raw = typeof e.metadata?.raw === 'string' ? e.metadata.raw : '';
+      msg = (raw || e.message || msg).replace(/https?:\/\/\S+/g, '').replace(/[:,]\s*$/, '').trim();
+      if (e.metadata?.provider_name) msg += ` [${e.metadata.provider_name}]`;
+    }
+  } catch { /* not JSON */ }
+  return `HTTP ${status}: ${msg}`;
+}
+
+type Delta = { error?: { code?: number }; choices?: { delta?: { content?: string; reasoning?: string }; finish_reason?: string }[] };
+
+// Streams one completion and returns the answer text; throws with a readable cause on failure.
+async function callModel(m: ModelInfo, prompt: string, opts: FindClipsOptions, label: string, noThink: boolean): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
-  let lastErr = 'no attempt made';
-  for (const model of models.slice(0, MAX_ATTEMPTS)) {
-    opts.onProgress?.(`${label}: asking ${model}…`);
-    try {
-      const res = await fetch(opts.apiKey ? CHAT_URL : PROXY_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 10000, // reasoning models spend most of this thinking
-          reasoning: { effort: 'low' },
-        }),
-        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        lastErr = `${model} HTTP ${res.status}`;
-        continue;
+  const ctrl = new AbortController();
+  const hard = setTimeout(() => ctrl.abort(new Error(`no answer within ${ATTEMPT_TIMEOUT_MS / 1000}s`)), ATTEMPT_TIMEOUT_MS);
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  const alive = () => {
+    clearTimeout(stall);
+    stall = setTimeout(() => ctrl.abort(new Error(`connection stalled for ${STALL_MS / 1000}s`)), STALL_MS);
+  };
+  const t0 = Date.now();
+  try {
+    alive();
+    const res = await fetch(opts.apiKey ? CHAT_URL : PROXY_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: m.id,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 16000,
+        stream: true,
+        // Free models are all reasoning models; thinking over a long transcript takes minutes, so turn it off.
+        reasoning: noThink ? { enabled: false } : { effort: 'low' },
+        ...(m.json ? { response_format: { type: 'json_object' } } : {}),
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) throw Object.assign(new Error(describeError(res.status, await res.text())), { status: res.status });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', content = '', thinking = false, finish = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      alive();
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue; // ": OPENROUTER PROCESSING" keepalives
+        const d = line.slice(5).trim();
+        if (d === '[DONE]') continue;
+        let j: Delta;
+        try { j = JSON.parse(d); } catch { continue; }
+        if (j.error) throw Object.assign(new Error(describeError(j.error.code ?? 200, d)), { status: j.error.code });
+        const ch = j.choices?.[0];
+        if (ch?.delta?.reasoning) thinking = true;
+        if (ch?.delta?.content) content += ch.delta.content;
+        if (ch?.finish_reason) finish = ch.finish_reason;
       }
-      const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
-      const clips = parseClips(data.choices?.[0]?.message?.content ?? '');
-      if (clips) {
-        opts.onProgress?.(`${label}: answered by ${model}`);
-        return clips;
+      const s = Math.round((Date.now() - t0) / 1000);
+      const what = content ? `writing answer (${content.length} chars)` : thinking ? 'thinking' : 'reading transcript';
+      opts.onProgress?.(`${label}: ${m.id} ${what}… ${s}s`);
+    }
+    if (!content.trim()) {
+      throw new Error(finish === 'length' ? 'spent its whole token budget thinking, no answer' : `empty answer (finish_reason ${finish || 'none'})`);
+    }
+    return content;
+  } catch (e) {
+    if (ctrl.signal.aborted && ctrl.signal.reason instanceof Error) throw ctrl.signal.reason;
+    throw e;
+  } finally {
+    clearTimeout(hard);
+    clearTimeout(stall);
+  }
+}
+
+async function queryChunk(prompt: string, opts: FindClipsOptions, label: string): Promise<unknown[]> {
+  const models = (await loadModels()).filter(m => !deadModels.has(m.id)).slice(0, MAX_ATTEMPTS);
+  if (!models.length) throw new Error('no usable free models left this session');
+  const errors: string[] = [];
+  for (const m of models) {
+    opts.onProgress?.(`${label}: asking ${m.id}…`);
+    for (let noThink = true; ; noThink = false) {
+      try {
+        const clips = parseClips(await callModel(m, prompt, opts, label, noThink));
+        if (clips) {
+          opts.onProgress?.(`${label}: answered by ${m.id}`);
+          console.info(`[reelio] clips answered by ${m.id}`);
+          return clips;
+        }
+        errors.push(`${m.id}: answer was not valid clip JSON`);
+      } catch (e) {
+        const status = (e as { status?: number }).status;
+        const msg = (e as Error).message;
+        // Some reasoning-only models refuse reasoning:{enabled:false}; retry the same model once with low effort.
+        if (status === 400 && noThink && /reason/i.test(msg)) continue;
+        if (status === 403 || status === 404) deadModels.add(m.id);
+        errors.push(`${m.id}: ${msg}`);
+        console.warn(`[reelio] ${m.id} failed: ${msg}`);
+        if (status === 401) throw new Fatal(`OpenRouter rejected the API key (${msg})`);
+        if (status === 402) throw new Fatal(`OpenRouter says the account needs credits (${msg})`);
+        if (status === 429 && /per-day|free-models/i.test(msg)) {
+          throw new Fatal(`Daily free-model request quota is used up (${msg}). It resets at 00:00 UTC.`);
+        }
       }
-      lastErr = `${model} returned no parseable JSON`;
-    } catch (e) {
-      lastErr = `${model}: ${(e as Error).message}`;
+      break;
     }
   }
-  throw new Error(`${label} failed after ${MAX_ATTEMPTS} attempts (${lastErr})`);
+  throw new Error(`${label}: all ${models.length} models failed:\n${errors.map(e => `• ${e}`).join('\n')}`);
 }
 
 // Snaps each raw clip to segment boundaries, enforces 15-90s, drops overlaps, sorts and caps.
@@ -193,6 +282,7 @@ export async function findClips(segments: Segment[], opts: FindClipsOptions = {}
     try {
       raw.push(...(await queryChunk(prompt, opts, label)));
     } catch (e) {
+      if (e instanceof Fatal) throw e;
       failures++;
       lastErr = e;
       opts.onProgress?.(`${label} failed, skipping`);

@@ -12,7 +12,7 @@ export default async function handler(req: Request): Promise<Response> {
   if (!process.env.OPENROUTER_API_KEY) {
     return new Response('Server is missing OPENROUTER_API_KEY', { status: 500 });
   }
-  body.max_tokens = Math.min(Number(body.max_tokens) || 4000, 10000);
+  body.max_tokens = Math.min(Number(body.max_tokens) || 4000, 16000);
 
   const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
