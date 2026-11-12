@@ -18,7 +18,7 @@ function ExtLink({ href, children }: { href: string; children: ReactNode }) {
 }
 
 /** Step-by-step setup, short and scannable. Used inline on the upload screen and in the header dialog. */
-export function HowToBody({ onSettings, onCredits }: { onSettings: () => void; onCredits: () => void }) {
+export function HowToBody({ onSettings }: { onSettings: () => void }) {
   const steps: { title: string; text: string; action: ReactNode }[] = [
     { title: 'Get a free Gemini key', text: 'Sign in to Google AI Studio, choose “Create API key” and copy it.', action: <ExtLink href={GEMINI_KEYS}>Open AI Studio</ExtLink> },
     { title: 'Or a free OpenRouter key', text: 'Sign in to OpenRouter, choose “Create Key” and copy it. Free models need no payment, with a small daily limit.', action: <ExtLink href={OPENROUTER_KEYS}>Open OpenRouter</ExtLink> },
@@ -54,19 +54,16 @@ export function HowToBody({ onSettings, onCredits }: { onSettings: () => void; o
         <li className="flex gap-2.5"><Captions className="mt-0.5 size-4 shrink-0 text-zing" aria-hidden />A video with subtitles, or a .srt/.vtt file dropped with it, skips transcription.</li>
       </ul>
 
-      <p className="text-xs text-muted">
-        <button type="button" onClick={onCredits} className="underline underline-offset-2 hover:text-fg">Credits</button>
-      </p>
     </div>
   )
 }
 
-export function HowToSection(p: { onSettings: () => void; onCredits: () => void }) {
+export function HowToSection(p: { onSettings: () => void }) {
   return <section className="slab p-5 sm:p-7" aria-label="How to use Reelio"><HowToBody {...p} /></section>
 }
 
 /** The same guide as a dialog, reachable from the header and Settings at any time. */
-export function HowToDialog({ open, onOpenChange, onSettings, onCredits }: { open: boolean; onOpenChange: (o: boolean) => void; onSettings: () => void; onCredits: () => void }) {
+export function HowToDialog({ open, onOpenChange, onSettings }: { open: boolean; onOpenChange: (o: boolean) => void; onSettings: () => void }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -75,7 +72,7 @@ export function HowToDialog({ open, onOpenChange, onSettings, onCredits }: { ope
           className="animate-overlay-in slab fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-1.5rem)] w-[min(94vw,46rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 focus:outline-none sm:p-7">
           <Dialog.Title className="sr-only">How to use Reelio</Dialog.Title>
           <Dialog.Close asChild><IconButton label="Close how-to" className="absolute top-3 right-3"><X className="size-5" /></IconButton></Dialog.Close>
-          <HowToBody onSettings={onSettings} onCredits={onCredits} />
+          <HowToBody onSettings={onSettings} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -21,7 +21,7 @@ export interface SettingsProps extends SettingsValues {
   setFit: (v: Fit) => void
   theme: ThemeId; setTheme: (t: ThemeId) => void
   open?: boolean; onOpenChange?: (o: boolean) => void // controlled, so other screens can open Settings
-  onHowTo?: () => void; onCredits?: () => void
+  onHowTo?: () => void
 }
 
 function Field({ id, label, help, children }: { id?: string; label: string; help?: string; children: ReactNode }) {
@@ -128,10 +128,7 @@ export default function SettingsDrawer(p: SettingsProps) {
               </Field>
             </Section>
           </div>
-          <footer className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
-            <span>Changes save automatically.</span>
-            {p.onCredits && <button type="button" onClick={p.onCredits} className="underline underline-offset-2 hover:text-fg">Credits</button>}
-          </footer>
+          <footer className="border-t border-line px-5 py-3 text-xs text-muted">Changes save automatically.</footer>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -26,7 +26,6 @@ import { useTheme } from './lib/theme'
 import ProgressView, { NO_INFO, type RunInfo, type Stage } from './components/ProgressView'
 import Segmented from './components/Segmented'
 import SettingsDrawer from './components/SettingsDrawer'
-import CreditsDialog from './components/Credits'
 import { HowToDialog, HowToSection } from './components/HowTo'
 import SubtitleSource from './components/SubtitleSource'
 import { Alert, Button, Chip } from './components/ui'
@@ -53,7 +52,6 @@ export default function App() {
   const [needKey, setNeedKey] = useState(false) // transcript is ready but no LLM key is set yet
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [howTo, setHowTo] = useState(false)
-  const [credits, setCredits] = useState(false)
   const [allDone, setAllDone] = useState(false) // brief 'all saved' state (presentation only)
   const [theme, setTheme] = useTheme()
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
@@ -295,7 +293,7 @@ export default function App() {
                 <span className="hidden sm:inline">How to</span>
               </Button>
               <SettingsDrawer {...{ geminiKey, apiKey, modelPref, workerPref, fit, setGeminiKey, setApiKey, setModelPref, setWorkerPref, setFit, theme, setTheme }}
-                open={settingsOpen} onOpenChange={setSettingsOpen} onHowTo={() => { setSettingsOpen(false); setHowTo(true) }} onCredits={() => setCredits(true)} />
+                open={settingsOpen} onOpenChange={setSettingsOpen} onHowTo={() => { setSettingsOpen(false); setHowTo(true) }} />
             </div>
           </header>
 
@@ -306,7 +304,7 @@ export default function App() {
               {stage === 'idle' && !unsupported && (
                 <m.div key="idle" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}>
                   <DropZone onFile={onFiles} />
-                  <div className="mt-5"><HowToSection onSettings={() => setSettingsOpen(true)} onCredits={() => setCredits(true)} /></div>
+                  <div className="mt-5"><HowToSection onSettings={() => setSettingsOpen(true)} /></div>
                 </m.div>
               )}
             </AnimatePresence>
@@ -434,8 +432,7 @@ export default function App() {
           <footer className="slab mx-auto mt-10 flex max-w-3xl flex-col items-center gap-1 rounded-3xl px-5 py-3 text-center text-xs text-muted">
             <p className="font-semibold text-fg">Video and audio stay on your device. Only the transcript text is sent to the LLM.</p>
           </footer>
-          <HowToDialog open={howTo} onOpenChange={setHowTo} onSettings={() => { setHowTo(false); setSettingsOpen(true) }} onCredits={() => setCredits(true)} />
-          <CreditsDialog open={credits} onOpenChange={setCredits} />
+          <HowToDialog open={howTo} onOpenChange={setHowTo} onSettings={() => { setHowTo(false); setSettingsOpen(true) }} />
         </div>
       </LazyMotion>
     </MotionConfig>

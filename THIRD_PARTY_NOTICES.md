@@ -1,7 +1,7 @@
 # Third-party notices
 
 Reelio is built on the work below. Each item is listed with its licence; where a licence asks for a notice or its
-text to travel with the software, that is included here. The same text is shown in the app under "Credits".
+text to travel with the software, that is included here. A copy ships with the built site as THIRD_PARTY_NOTICES.txt (public/).
 
 ## Animated illustrations
 
