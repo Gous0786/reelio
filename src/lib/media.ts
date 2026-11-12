@@ -3,6 +3,7 @@ import {
 } from 'mediabunny'
 import type { Rect } from './facecam'
 import { facecamComposer } from './facecamLayout'
+import { buildTrack, drawCaptions, loadCaptionFont, type CaptionConfig, type CaptionLayout } from './captions'
 
 export const SAMPLE_RATE = 16000
 
@@ -88,9 +89,31 @@ function blurComposer() {
   }
 }
 
+type Compose = (s: VideoSample) => OffscreenCanvas
+
+/** Centre crop as a per-frame compositor (only used when captions are on: the plain 'crop' option is used otherwise). */
+function coverComposer(sx: number, sy: number, sw: number, sh: number): Compose {
+  const out = new OffscreenCanvas(OW, OH), ctx = out.getContext('2d')!
+  ctx.imageSmoothingQuality = 'high'
+  return s => { s.draw(ctx, sx, sy, sw, sh, 0, 0, OW, OH); return out }
+}
+
+/** Wraps any compositor so the captions are drawn on top of each composed frame. The sample timestamp is
+ *  relative to the trim start, so source time = start + timestamp. */
+function withCaptions(compose: Compose, cap: CaptionConfig, start: number, end: number, layout: CaptionLayout): Compose {
+  const track = buildTrack(cap.words, cap.style, start, end)
+  return s => {
+    const out = compose(s)
+    drawCaptions(out.getContext('2d')!, track, start + s.timestamp, layout)
+    return out
+  }
+}
+
 /** Render [start, end] of the original file as a 720x1280 H.264/AAC MP4: centre-cropped ('cover') or
- *  whole frame over a blurred copy of itself ('blur'), or the facecam layout when a facecam rectangle is given. */
-export async function exportClip(file: File, start: number, end: number, fit: Fit, onProgress: (pct: number) => void, facecam?: Rect | null): Promise<Blob> {
+ *  whole frame over a blurred copy of itself ('blur'), or the facecam layout when a facecam rectangle is given.
+ *  `captions` burns word-timed captions into every mode. */
+export async function exportClip(file: File, start: number, end: number, fit: Fit, onProgress: (pct: number) => void, facecam?: Rect | null, captions?: CaptionConfig | null): Promise<Blob> {
+  if (captions) await loadCaptionFont() // the MP4 must use the same font as the preview
   const input = openInput(file)
   try {
     const vt = await input.getPrimaryVideoTrack()
@@ -99,15 +122,19 @@ export async function exportClip(file: File, start: number, end: number, fit: Fi
     const cw = Math.min(w, Math.floor((h * 9) / 16)), ch = Math.min(h, Math.floor((w * 16) / 9))
     const cropW = cw & ~1, cropH = ch & ~1
     const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() })
+    const crop = { left: Math.floor((w - cropW) / 2), top: Math.floor((h - cropH) / 2), width: cropW, height: cropH }
+    const composed = (compose: Compose, layout: CaptionLayout) => ({
+      codec: 'avc' as const, process: captions ? withCaptions(compose, captions, start, end, layout) : compose, processedWidth: OW, processedHeight: OH,
+    })
     const conv = await Conversion.init({
       input, output,
       trim: { start, end },
-      video: facecam ? { codec: 'avc', process: facecamComposer(facecam), processedWidth: OW, processedHeight: OH }
-        : fit === 'blur'
-        ? { codec: 'avc', process: blurComposer(), processedWidth: OW, processedHeight: OH }
+      video: facecam ? composed(facecamComposer(facecam), 'facecam')
+        : fit === 'blur' ? composed(blurComposer(), 'blur')
+        : captions ? composed(coverComposer(crop.left, crop.top, crop.width, crop.height), 'cover')
         : {
           codec: 'avc',
-          crop: { left: Math.floor((w - cropW) / 2), top: Math.floor((h - cropH) / 2), width: cropW, height: cropH },
+          crop,
           width: OW, height: OH, fit: 'fill',
         },
       audio: { codec: 'aac' },

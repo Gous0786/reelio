@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import * as m from 'motion/react-m'
 import { AlertTriangle, Clapperboard, Crop, Database, Download, Maximize2, FilePlus2, FileVideo, RefreshCw, ScanText, Sparkles } from 'lucide-react'
-import type { Clip, Loud, Segment } from './lib/types'
+import type { Clip, Loud, Segment, Word } from './lib/types'
 import { findClips } from './lib/llm'
 import { findRankedClips } from './lib/rank'
 import { LoudnessMeter } from './lib/signals'
@@ -10,9 +10,11 @@ import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
 import { createPool, type WhisperModel } from './lib/transcribe'
 import { detectFacecam, type FacecamSetting } from './lib/facecam'
+import type { CaptionConfig } from './lib/captions'
 import { facecamKey, getFacecam, putFacecam } from './lib/facecamStore'
 import { dur, fmt, outName, save } from './lib/format'
 import Background from './components/Background'
+import CaptionControls, { useCaptionSettings } from './components/CaptionControls'
 import ClipCard from './components/ClipCard'
 import FacecamPanel from './components/FacecamPanel'
 import DropZone from './components/DropZone'
@@ -43,10 +45,13 @@ export default function App() {
   const [renders, setRenders] = useState(0) // single-clip exports in flight
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
+  const [words, setWords] = useState<Word[]>([]) // word timings for the captions
   const [fc, setFc] = useState<FacecamSetting | null>(null) // facecam setting for the current video
   const [fcBusy, setFcBusy] = useState(false)
   const fcAbort = useRef<AbortController | null>(null)
   const fcRect = fc?.enabled ? fc.rect : null // set = the stacked facecam layout is on
+  const [capSet, setCapSet] = useCaptionSettings()
+  const captions: CaptionConfig | null = capSet.on && words.length ? { words, style: capSet.style } : null
   const unsupported = checkSupport()
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
@@ -87,7 +92,7 @@ export default function App() {
 
   const start = async (f: File, force = false) => {
     void runFacecam(f)
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; loud.current = null; setInfo(NO_INFO)
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setWords([]); loud.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
@@ -100,7 +105,7 @@ export default function App() {
       if (force) await delTranscript(key)
       else {
         const hit = await getTranscript(key)
-        if (hit?.segs.length) { segments.current = hit.segs; loud.current = hit.loud; setCached(true); await runClips(hit.segs); return }
+        if (hit?.segs.length) { segments.current = hit.segs; loud.current = hit.loud; setWords(hit.words ?? []); setCached(true); await runClips(hit.segs); return }
       }
       setStatus(`Downloading ${mname}… 0%`)
       tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => { setStatus(`Downloading ${mname}… ${p}%`); setInfo(i => ({ ...i, download: p })) })
@@ -110,7 +115,7 @@ export default function App() {
       if (tr.device === 'webgpu' && /intel/i.test(tr.gpu))
         setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
       setStage('transcribe')
-      const segs: Segment[] = []
+      const segs: Segment[] = [], wds: Word[] = []
       const meter = new LoudnessMeter()
       const t0 = Date.now()
       let done = 0, skipped = 0, partial = false
@@ -134,7 +139,7 @@ export default function App() {
           let buf = sl.audio
           try {
             for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
-              try { segs.push(...(await w.run(buf, sl.offset))); break } catch (e) {
+              try { const r = await w.run(buf, sl.offset); segs.push(...r.segments); wds.push(...r.words); break } catch (e) {
                 const back = (e as { audio?: Float32Array }).audio
                 if (!back) throw e // worker died: this lane stops
                 if (attempt === 1) { skipped++; break }
@@ -146,7 +151,7 @@ export default function App() {
         }
       }
       await Promise.all(pool.map(lane))
-      segs.sort((x, y) => x.start - y.start)
+      segs.sort((x, y) => x.start - y.start); wds.sort((x, y) => x.start - y.start)
       if (fatal) {
         if (!segs.length) throw fatal
         partial = true
@@ -154,23 +159,23 @@ export default function App() {
       }
       if (skipped) setWarn(w => w || `${skipped} audio slice(s) failed and were skipped.`)
       if (!segs.length) throw new Error('No speech was detected in this video.')
-      segments.current = segs
+      segments.current = segs; setWords(wds)
       loud.current = meter.finish()
-      if (!partial && !skipped) await putTranscript(key, { segs, loud: loud.current })
+      if (!partial && !skipped) await putTranscript(key, { segs, loud: loud.current, words: wds })
       await runClips(segs, force)
     } catch (e) {
       setError({ msg: e instanceof Error ? e.message : String(e), retry: false }); setStage('error')
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; loud.current = null }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
     setAllErr('')
     for (let i = 0; i < clips.length; i++) {
       try {
-        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }), fcRect)
+        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }), fcRect, captions)
         save(blob, outName(file!, i + 1))
       } catch (e) { setAllErr(`Clip ${i + 1}: ${e instanceof Error ? e.message : e}`); break }
     }
@@ -279,6 +284,7 @@ export default function App() {
                         { value: 'cover', label: <><Crop className="size-3.5" />Centre crop</>, hint: 'Fill the 9:16 frame' },
                         { value: 'blur', label: <><Maximize2 className="size-3.5" />Fit + blur</>, hint: 'Whole picture over a blurred background' },
                       ]} />
+                      <CaptionControls value={capSet} onChange={setCapSet} available={words.length > 0} />
                     </div>
                     <div className="flex min-w-0 flex-col gap-2 sm:w-72">
                       {all && (
@@ -309,7 +315,7 @@ export default function App() {
                 <section className="grid gap-5 lg:grid-cols-2" aria-label="Clips">
                   {clips.map((c, i) => (
                     <m.div key={i} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 5) * 0.05, duration: 0.3 }}>
-                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} locked={all !== null}
+                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} captions={captions} locked={all !== null}
                         onTrim={t => trim(i, t)} onRendering={a => setRenders(n => Math.max(0, n + (a ? 1 : -1)))} />
                     </m.div>
                   ))}

@@ -1,9 +1,10 @@
 /// <reference lib="webworker" />
 // Pattern follows xenova/whisper-web: pipeline() in a worker, WebGPU if available else WASM.
 // Protocol: {type:'init', model} -> {type:'download', pct} ... {type:'ready', device, gpu}
-//           {type:'run', audio, offset} -> {type:'result', segments} | {type:'error', message, audio}
+//           {type:'run', audio, offset} -> {type:'result', segments, words} | {type:'error', message, audio}
+// Word timestamps need the '<model>_timestamped' ONNX export (same weights, decoder also outputs cross-attentions).
 import { pipeline, env } from '@huggingface/transformers'
-import type { Segment } from '../lib/types'
+import type { Segment, Word } from '../lib/types'
 
 env.allowLocalModels = false
 const SR = 16000
@@ -25,7 +26,7 @@ async function init(model: string) {
     self.postMessage({ type: 'download', pct })
   }
   const make = (device: 'webgpu' | 'wasm') =>
-    pipeline('automatic-speech-recognition', model, {
+    pipeline('automatic-speech-recognition', `${model}_timestamped`, {
       device,
       dtype: device === 'webgpu' ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8',
       progress_callback,
@@ -68,24 +69,51 @@ function repeated(n: string) {
   return n === a && n === b
 }
 
+// Word-level timestamps replace Whisper's own segments, so segments are rebuilt from the words: a new segment
+// after sentence-ending punctuation, a pause of 1 s or more, or 15 s of speech. Same Segment shape as before.
+const SENTENCE_END = /[.!?…]["')\]]?$/
+function toSegments(words: Word[]): { seg: Segment; words: Word[] }[] {
+  const out: { seg: Segment; words: Word[] }[] = []
+  let cur: Word[] = []
+  const flush = () => {
+    if (!cur.length) return
+    out.push({ seg: { start: cur[0].start, end: cur[cur.length - 1].end, text: cur.map(w => w.text).join(' ') }, words: cur })
+    cur = []
+  }
+  for (const w of words) {
+    const p = cur[cur.length - 1]
+    if (p && (w.start - p.end >= 1 || w.end - cur[0].start > 15 || SENTENCE_END.test(p.text))) flush()
+    cur.push(w)
+  }
+  flush()
+  return out
+}
+
 async function run(audio: Float32Array, offset: number) {
   try {
-    if (silent(audio)) { self.postMessage({ type: 'result', segments: [] }); return }
+    if (silent(audio)) { self.postMessage({ type: 'result', segments: [], words: [] }); return }
     const out = await asr(audio, {
-      return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
+      return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
       max_new_tokens: 224, no_repeat_ngram_size: 5,
     })
-    const segments: Segment[] = []
+    const words: Word[] = []
+    let last = 0
     for (const c of (out.chunks ?? []) as { text: string; timestamp: [number, number | null] }[]) {
       const text = c.text.trim()
-      const n = norm(text)
+      if (!text) continue
+      const s = Math.max(last, c.timestamp[0] ?? last)
+      const e = Math.max(s, c.timestamp[1] ?? s + 0.3)
+      words.push({ start: offset + s, end: offset + e, text })
+      last = s
+    }
+    const segments: Segment[] = [], kept: Word[] = []
+    for (const g of toSegments(words)) {
+      const n = norm(g.seg.text)
       if (repeated(n)) continue
       recent.push(n); if (recent.length > 2) recent.shift()
-      const s = c.timestamp[0] ?? 0
-      const e = c.timestamp[1] ?? Math.min(audio.length / SR, s + 5)
-      segments.push({ start: offset + s, end: offset + e, text })
+      segments.push(g.seg); kept.push(...g.words)
     }
-    self.postMessage({ type: 'result', segments })
+    self.postMessage({ type: 'result', segments, words: kept })
   } catch (err) {
     // hand the buffer back so the caller can retry this slice without re-decoding
     self.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err), audio }, [audio.buffer])

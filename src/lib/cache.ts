@@ -1,4 +1,4 @@
-import type { Loud, Segment } from './types'
+import type { Loud, Segment, Word } from './types'
 
 // IndexedDB caches. All calls fail soft (the cache is optional; also absent outside a browser).
 //  transcripts: finished transcripts keyed by file identity + whisper model
@@ -20,9 +20,9 @@ const tx = async <T,>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectS
   }).finally(() => db.close())
 }
 
-// v2: the cached transcript now carries the loudness timeline (old v1 entries are ignored and re-transcribed)
-export const cacheKey = (f: File, model: string) => `v2|${f.name}|${f.size}|${f.lastModified}|${model}`
-export interface TranscriptEntry { segs: Segment[]; loud: Loud }
+// v3: the cached transcript also carries word timings (older entries are ignored and re-transcribed)
+export const cacheKey = (f: File, model: string) => `v3|${f.name}|${f.size}|${f.lastModified}|${model}`
+export interface TranscriptEntry { segs: Segment[]; loud: Loud; words: Word[] }
 export const getTranscript = (key: string) => tx<TranscriptEntry>(TRANSCRIPTS, 'readonly', s => s.get(key)).catch(() => undefined)
 export const putTranscript = (key: string, v: TranscriptEntry) => tx(TRANSCRIPTS, 'readwrite', s => s.put(v, key)).catch(() => undefined)
 export const delTranscript = (key: string) => tx(TRANSCRIPTS, 'readwrite', s => s.delete(key)).catch(() => undefined)

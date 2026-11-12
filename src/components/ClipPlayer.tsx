@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Slider from '@radix-ui/react-slider'
 import { Pause, Play, Volume2, VolumeX, Crop, Expand, Maximize2, ScanFace, X } from 'lucide-react'
 import type { Clip } from '../lib/types'
@@ -6,13 +6,15 @@ import type { Fit } from '../lib/media'
 import { fmt } from '../lib/format'
 import type { Rect } from '../lib/facecam'
 import { previewStyles } from '../lib/facecamLayout'
+import { buildTrack, drawCaptions, loadCaptionFont, type CaptionConfig } from '../lib/captions'
 
 export interface PlayerHandle { seek: (t: number) => void; pause: () => void; duration: number }
 
 /** 9:16 preview of one clip: the source file played between clip.start and clip.end (looping back to start),
  *  with play/pause, a clip-relative scrubber, time, mute, and the chosen fit mode shown as in the export. */
-export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, handle, onExpand, onClose, autoPlay, startAt }: {
+export default function ClipPlayer({ url, clip, fit, fc, captions, onDuration, onTime, handle, onExpand, onClose, autoPlay, startAt }: {
   url: string; clip: Clip; fit: Fit; fc?: Rect | null
+  captions?: CaptionConfig | null // burned-in captions drawn over the video (same draw code as the export)
   onExpand?: () => void // shows an 'Enlarge preview' button
   onClose?: () => void // shows a close button (used in the enlarged view)
   autoPlay?: boolean; startAt?: number // enlarged view: begin playing from here
@@ -29,6 +31,9 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
   const [scrubbing, setScrubbing] = useState(false)
   const [aspect, setAspect] = useState(16 / 9)
   const fcs = fc ? previewStyles(fc, aspect) : null // facecam layout: the bg ref is the facecam copy of the video
+  const capCanvas = useRef<HTMLCanvasElement>(null)
+  const track = useMemo(() => (captions ? buildTrack(captions.words, captions.style, clip.start, clip.end) : null), [captions, clip.start, clip.end])
+  const layout = fc ? 'facecam' : fit === 'blur' ? 'blur' : 'cover'
   const len = clip.end - clip.start
   const rel = Math.max(0, Math.min(len, t - clip.start))
 
@@ -41,6 +46,20 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
     }
     return () => { handle.current = null }
   }, [handle])
+
+  // Caption overlay: redrawn whenever the video's time (or the style/layout) changes.
+  useEffect(() => {
+    const ctx = capCanvas.current?.getContext('2d'), v = vid.current
+    if (!ctx || !v || !track) return
+    let raf = 0, last = NaN, on = true
+    const frame = () => {
+      if (!on) return
+      if (v.currentTime !== last) { last = v.currentTime; ctx.clearRect(0, 0, 720, 1280); drawCaptions(ctx, track, last, layout) }
+      raf = requestAnimationFrame(frame)
+    }
+    void loadCaptionFont().then(() => { if (on) frame() })
+    return () => { on = false; cancelAnimationFrame(raf); ctx.clearRect(0, 0, 720, 1280) }
+  }, [track, layout])
 
   const toggle = () => {
     const v = vid.current!
@@ -77,6 +96,8 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
           if (!scrubbing) { setT(v.currentTime); onTime?.(v.currentTime) }
         }}
       />
+
+      {track && <canvas ref={capCanvas} width={720} height={1280} aria-hidden className="pointer-events-none absolute inset-0 size-full" />}
 
       {/* click target + big play badge */}
       <button
