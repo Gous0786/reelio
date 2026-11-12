@@ -5,10 +5,37 @@ text to travel with the software, that is included here. The same text is shown 
 
 ## Animated illustrations
 
-Noto Emoji Animation, by Google (https://googlefonts.github.io/noto-emoji-animation/), licensed under the
-Creative Commons Attribution 4.0 International licence (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
-The ten animation files in src/assets/lottie are used exactly as published (no changes were made); they are only
-played back with lottie-web. They are provided without warranty.
+Free animations from LottieFiles (https://lottiefiles.com), used under the Lottie Simple License (FL 9.13.21,
+https://lottiefiles.com/page/license). The files are used exactly as downloaded (no changes) and are only played
+back with lottie-web. The licence permits use without attribution; it also asks that its terms accompany the files,
+so the licence text is reproduced below. Each animation and its page on LottieFiles:
+
+- src/assets/lottie/clapper.json: "Film slate" by Jazmín Arianna, https://lottiefiles.com/free-animation/film-slate-Z0oNKhLiaF
+- src/assets/lottie/hourglass.json: "QZTNGOwcgu" by Bella Chen, https://lottiefiles.com/free-animation/qztngowcgu-m4OOGPhYxS
+- src/assets/lottie/sparkles.json: "Sparkles" by Aayush Khandelwal, https://lottiefiles.com/free-animation/sparkles-6oLQFN3X9t
+- src/assets/lottie/scissors.json: "Scissor Snip" by Ana Armendariz, https://lottiefiles.com/free-animation/scissor-snip-bX7rVnyPDY
+- src/assets/lottie/box.json: "Empty Box" by Animo Arts, https://lottiefiles.com/free-animation/empty-box-uNf2uP0OdP
+- src/assets/lottie/rocket.json: "Startup" by manju, https://lottiefiles.com/free-animation/startup-cZz8zcqv83
+- src/assets/lottie/party.json: "Party Popper" by Dheerendra chaturvedi, https://lottiefiles.com/free-animation/party-popper-gPZtLyFXFI
+- src/assets/lottie/search.json: "Magnifying Glass" by Badri Narayanan, https://lottiefiles.com/free-animation/magnifying-glass-TR05KS87T5
+- src/assets/lottie/dizzy.json: "Alert" by Alex Martov, https://lottiefiles.com/free-animation/alert-ZX7Oo4AjiA
+- src/assets/lottie/camera.json: "Camera" by Iluzie Studio, https://lottiefiles.com/free-animation/camera-MIl2zRBYCk
+
+Lottie Simple License (FL 9.13.21)
+
+Copyright © 2021 Design Barn Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of the public animation files available for download at the LottieFiles site (“Files”) to download, reproduce, modify, publish, distribute, publicly display, and publicly digitally perform such Files, including for commercial purposes, provided that any display, publication, performance, or distribution of Files must contain (and be subject to) the same terms and conditions of this license.
+
+Modifications to Files are deemed derivative works and must also be expressly distributed under the same terms and conditions of this license.
+
+You may not purport to impose any additional or different terms or conditions on, or apply any technical measures that restrict exercise of, the rights granted under this license.
+
+This license does not include the right to collect or compile Files from LottieFiles to replicate or develop a similar or competing service.
+
+Use of Files without attributing the creator(s) of the Files is permitted under this license, though attribution is strongly encouraged. If attributions are included, such attributions should be visible to the end user.
+
+FILES ARE PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. EXCEPT TO THE EXTENT REQUIRED BY APPLICABLE LAW, IN NO EVENT WILL THE CREATOR(S) OF FILES OR DESIGN BARN, INC. BE LIABLE ON ANY LEGAL THEORY FOR ANY SPECIAL, INCIDENTAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES ARISING OUT OF THIS LICENSE OR THE USE OF SUCH FILES.
 
 ## Copied-in interface components
 
