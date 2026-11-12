@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import * as Slider from '@radix-ui/react-slider'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Scissors } from 'lucide-react'
 import { fmt1 } from '../lib/format'
 import { IconButton } from './ui'
 
@@ -18,16 +18,17 @@ export default function TrimSlider({ start, end, bounds, playhead, onChange, onN
   const span = Math.max(1, hi - lo)
   const pos = (v: number) => `${((v - lo) / span) * 100}%`
   const dragged = useRef<'start' | 'end'>('start')
+  const thumb = 'group/t relative block h-14 w-4 rounded-lg border-2 border-edge bg-accent shadow-lg outline-none transition-transform hover:scale-y-105 focus-visible:ring-4 focus-visible:ring-zing'
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className="flex items-baseline justify-between text-xs text-zinc-400">
-        <span className="font-medium text-zinc-200">Trim</span>
-        <span className="tabular-nums">{(end - start).toFixed(1)}s selected</span>
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between text-xs text-muted">
+        <span className="font-display flex items-center gap-1.5 text-sm font-bold text-fg"><Scissors className="size-3.5 text-hot" aria-hidden />Trim</span>
+        <span className="tabular-nums"><span className="font-display text-base font-bold text-fg">{(end - start).toFixed(1)}s</span> selected</span>
       </div>
 
       <Slider.Root
-        className="relative flex h-10 w-full touch-none select-none items-center"
+        className="relative flex h-16 w-full touch-none select-none items-center"
         min={lo} max={hi} step={0.1} minStepsBetweenThumbs={MIN_LEN * 10}
         value={[start, end]}
         onValueChange={([s, e]) => {
@@ -37,27 +38,27 @@ export default function TrimSlider({ start, end, bounds, playhead, onChange, onN
         }}
         onValueCommit={() => onCommit(dragged.current)}
       >
-        {/* tick ruler */}
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 flex h-2 justify-between px-1">
-          {Array.from({ length: 21 }, (_, i) => <span key={i} className={`w-px ${i % 5 === 0 ? 'h-2 bg-white/30' : 'h-1 bg-white/15'}`} />)}
-        </div>
-        <Slider.Track className="relative h-6 grow overflow-hidden rounded-lg bg-white/8 ring-1 ring-white/10">
-          <Slider.Range className="absolute h-full rounded-md bg-violet-500/35 ring-1 ring-inset ring-violet-400/70" />
+        {/* film strip: sprocket rows around a row of frame cells */}
+        <Slider.Track className="relative h-12 grow overflow-hidden rounded-xl bg-bezel">
+          <span aria-hidden className="sprockets absolute inset-x-1 top-1 h-1.5 opacity-60 [background-image:radial-gradient(circle,var(--raised)_0_1.6px,transparent_2px)]" />
+          <span aria-hidden className="sprockets absolute inset-x-1 bottom-1 h-1.5 opacity-60 [background-image:radial-gradient(circle,var(--raised)_0_1.6px,transparent_2px)]" />
+          <span aria-hidden className="absolute inset-x-0 inset-y-3 bg-[repeating-linear-gradient(90deg,var(--raised)_0_22px,var(--bezel)_22px_24px)] opacity-90" />
+          <Slider.Range className="absolute h-full border-y-[3px] border-accent bg-accent/25" />
         </Slider.Track>
         {playhead !== null && playhead >= lo && playhead <= hi && (
-          <span aria-hidden className="pointer-events-none absolute top-1 h-8 w-0.5 -translate-x-1/2 rounded bg-white/90" style={{ left: pos(playhead) }} />
+          <span aria-hidden className="pointer-events-none absolute top-0 h-16 w-0.5 -translate-x-1/2 rounded bg-hot" style={{ left: pos(playhead) }}>
+            <span className="absolute -top-0.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full bg-hot" />
+          </span>
         )}
-        <Slider.Thumb
-          aria-label="Clip start" aria-valuetext={fmt1(start)}
-          className="block h-8 w-3.5 rounded-md bg-white shadow-lg ring-2 ring-violet-500 transition hover:scale-y-110 focus-visible:ring-4 focus-visible:ring-violet-300"
-        />
-        <Slider.Thumb
-          aria-label="Clip end" aria-valuetext={fmt1(end)}
-          className="block h-8 w-3.5 rounded-md bg-white shadow-lg ring-2 ring-fuchsia-500 transition hover:scale-y-110 focus-visible:ring-4 focus-visible:ring-fuchsia-300"
-        />
+        <Slider.Thumb aria-label="Clip start" aria-valuetext={fmt1(start)} className={thumb}>
+          <span aria-hidden className="absolute inset-y-4 left-1/2 w-0.5 -translate-x-1/2 rounded bg-on-accent/60" />
+        </Slider.Thumb>
+        <Slider.Thumb aria-label="Clip end" aria-valuetext={fmt1(end)} className={thumb}>
+          <span aria-hidden className="absolute inset-y-4 left-1/2 w-0.5 -translate-x-1/2 rounded bg-on-accent/60" />
+        </Slider.Thumb>
       </Slider.Root>
 
-      <div className="-mt-1 flex justify-between text-[11px] tabular-nums text-zinc-500" aria-hidden>
+      <div className="flex justify-between text-[11px] text-muted tabular-nums" aria-hidden>
         <span>{fmt1(lo)}</span><span>{fmt1(hi)}</span>
       </div>
 
@@ -71,12 +72,12 @@ export default function TrimSlider({ start, end, bounds, playhead, onChange, onN
 
 function Nudge({ label, value, onNudge }: { label: string; value: number; onNudge: (d: number) => void }) {
   return (
-    <div className="flex items-center justify-between gap-1 rounded-full border border-white/10 bg-white/4 px-1 py-0.5">
+    <div className="flex items-center justify-between gap-0.5 rounded-full border border-line bg-raised px-1 py-0.5">
       <IconButton size="sm" label={`${label} −0.5 s`} onClick={() => onNudge(-0.5)} className="size-7"><ChevronsLeft className="size-4" /></IconButton>
       <IconButton size="sm" label={`${label} −0.1 s`} onClick={() => onNudge(-0.1)} className="size-7"><ChevronLeft className="size-4" /></IconButton>
-      <span className="flex min-w-0 items-baseline gap-2 px-1 text-center">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-400">{label}</span>
-        <span className="text-sm font-medium tabular-nums text-zinc-100">{fmt1(value)}</span>
+      <span className="flex min-w-0 items-baseline gap-1.5 px-1 text-center">
+        <span className="text-[10px] font-bold tracking-[0.14em] text-muted uppercase">{label}</span>
+        <span className="text-sm font-semibold text-fg tabular-nums">{fmt1(value)}</span>
       </span>
       <IconButton size="sm" label={`${label} +0.1 s`} onClick={() => onNudge(0.1)} className="size-7"><ChevronRight className="size-4" /></IconButton>
       <IconButton size="sm" label={`${label} +0.5 s`} onClick={() => onNudge(0.5)} className="size-7"><ChevronsRight className="size-4" /></IconButton>

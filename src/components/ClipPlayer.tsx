@@ -55,7 +55,7 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
   const seekRel = (r: number) => { if (vid.current) { vid.current.currentTime = clip.start + r; setT(clip.start + r) } }
 
   return (
-    <div className="group relative isolate aspect-9/16 w-full overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+    <div className="group relative isolate aspect-9/16 w-full overflow-hidden rounded-[1.35rem] bg-black">
       {(fit === 'blur' || fc) && (
         <video ref={bg} className={fc ? 'pointer-events-none' : 'pointer-events-none absolute inset-0 size-full scale-[1.4] object-cover blur-[22px]'} style={fcs?.cam}
           src={`${url}#t=${firstStart.current}`} muted preload="metadata" playsInline />
@@ -83,12 +83,12 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
         type="button" onClick={toggle} aria-label={playing ? 'Pause preview' : 'Play preview'}
         className="absolute inset-0 grid place-items-center focus-visible:outline-offset-[-4px]"
       >
-        <span className={`grid size-14 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/25 transition ${playing ? 'scale-75 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>
+        <span className={`grid size-16 place-items-center rounded-full bg-accent text-on-accent shadow-[0_6px_0_0_var(--edge)] transition duration-200 ${playing ? 'scale-75 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100 group-hover:scale-110'}`}>
           {playing ? <Pause className="size-6" fill="currentColor" /> : <Play className="size-6 translate-x-0.5" fill="currentColor" />}
         </span>
       </button>
 
-      <span className="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 ring-1 ring-white/15">
+      <span className="pointer-events-none absolute left-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-black/65 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm">
         {fc ? <ScanFace className="size-3" aria-hidden /> : fit === 'blur' ? <Maximize2 className="size-3" aria-hidden /> : <Crop className="size-3" aria-hidden />}
         {fc ? 'Facecam stack' : fit === 'blur' ? 'Fit + blur' : 'Centre crop'}
       </span>
@@ -96,13 +96,13 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
       <div className="absolute right-2 top-2 z-10 flex gap-1.5">
         {onExpand && (
           <button type="button" onClick={onExpand} aria-label="Enlarge preview" title="Enlarge preview"
-            className="grid size-8 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 transition hover:bg-black/75">
+            className="grid size-8 place-items-center rounded-full bg-black/65 text-white transition hover:bg-accent hover:text-on-accent">
             <Expand className="size-4" />
           </button>
         )}
         {onClose && (
           <button type="button" onClick={onClose} aria-label="Close enlarged preview" title="Close"
-            className="grid size-8 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 transition hover:bg-black/75">
+            className="grid size-8 place-items-center rounded-full bg-black/65 text-white transition hover:bg-accent hover:text-on-accent">
             <X className="size-4" />
           </button>
         )}
@@ -117,10 +117,10 @@ export default function ClipPlayer({ url, clip, fit, fc, onDuration, onTime, han
           onValueCommit={() => setScrubbing(false)}
         >
           <Slider.Track className="relative h-1 grow rounded-full bg-white/25 transition-[height] group-hover:h-1.5">
-            <Slider.Range className="absolute h-full rounded-full bg-white" />
+            <Slider.Range className="absolute h-full rounded-full bg-accent" />
           </Slider.Track>
           <Slider.Thumb aria-label="Seek within clip" aria-valuetext={`${fmt(rel)} of ${fmt(len)}`}
-            className="block size-3 rounded-full bg-white shadow ring-2 ring-violet-400/0 transition hover:scale-125 focus-visible:ring-violet-400" />
+            className="block size-3.5 rounded-full bg-white shadow ring-2 ring-accent transition hover:scale-125 focus-visible:ring-4" />
         </Slider.Root>
         <div className="flex items-center justify-between text-[11px] tabular-nums text-white/85">
           <span>{fmt(rel)} / {fmt(len)}</span>

@@ -1,7 +1,8 @@
-import { AudioLines, Check, Cpu, Gauge, HardDriveDownload, Hourglass, Layers, Sparkles, Timer, type LucideIcon } from 'lucide-react'
+import { AudioLines, Check, HardDriveDownload, PauseCircle, Sparkles, type LucideIcon } from 'lucide-react'
 import clsx from 'clsx'
-import { Loader2 } from 'lucide-react'
-import { Progress, card } from './ui'
+import { Progress } from './ui'
+import { Anim } from './Illustrations'
+import BorderBeam from './vengeance/BorderBeam'
 import { dur } from '../lib/format'
 
 export type Stage = 'idle' | 'model' | 'transcribe' | 'clips' | 'done' | 'error'
@@ -14,66 +15,86 @@ export interface RunInfo {
 }
 export const NO_INFO: RunInfo = { model: null, device: null, gpu: null, workers: null, pct: null, elapsed: null, left: null, speed: null, download: null }
 
-const STEPS: { id: Stage; label: string; Icon: LucideIcon }[] = [
-  { id: 'model', label: 'Loading speech model', Icon: HardDriveDownload },
-  { id: 'transcribe', label: 'Extracting audio & transcribing', Icon: AudioLines },
-  { id: 'clips', label: 'Finding clips', Icon: Sparkles },
+const STEPS: { id: Stage; label: string; title: string; Icon: LucideIcon }[] = [
+  { id: 'model', label: 'Speech model', title: 'Warming up the speech model', Icon: HardDriveDownload },
+  { id: 'transcribe', label: 'Transcribe', title: 'Listening to every second', Icon: AudioLines },
+  { id: 'clips', label: 'Find clips', title: 'Picking the best moments', Icon: Sparkles },
 ]
+const BARS = Array.from({ length: 72 }, (_, i) => 0.18 + 0.82 * Math.abs(Math.sin(i * 0.9) * Math.sin(i * 0.23 + 1)))
 
-function Stat({ Icon, label, value, wide }: { Icon: LucideIcon; label: string; value: string; wide?: boolean }) {
+function Tile({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={clsx('flex min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/4 px-3 py-2.5', wide && 'col-span-2 lg:col-span-1')}>
-      <Icon className="size-4 shrink-0 text-violet-300" aria-hidden />
-      <div className="min-w-0">
-        <p className="text-[11px] tracking-wide text-zinc-400 uppercase">{label}</p>
-        <p className="truncate text-sm font-medium text-zinc-100 tabular-nums" title={value}>{value}</p>
-      </div>
+    <div className={clsx('inset min-w-0 px-3.5 py-3', wide && 'col-span-2')}>
+      <p className="text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">{label}</p>
+      <p className="font-display mt-0.5 truncate text-lg leading-tight font-bold text-fg tabular-nums" title={value}>{value}</p>
     </div>
   )
 }
 
 export default function ProgressView({ stage, status, info }: { stage: Stage; status: string; info: RunInfo }) {
-  const cur = STEPS.findIndex(s => s.id === stage)
+  const cur = Math.max(0, STEPS.findIndex(s => s.id === stage))
   const bar = stage === 'transcribe' ? info.pct : stage === 'model' ? info.download : null
   const dash = '—'
+  const step = STEPS[cur]
   return (
-    <section className={clsx(card, 'p-5 sm:p-6')} aria-live="polite" aria-label="Processing progress">
-      <ol className="grid gap-3 sm:grid-cols-3">
+    <section className="slab overflow-hidden p-5 sm:p-7" aria-live="polite" aria-label="Processing progress">
+      <div className="flex items-center gap-4">
+        <Anim name={stage === 'clips' ? 'sparkles' : 'hourglass'} className="size-14 sm:size-18" />
+        <div className="min-w-0 flex-1">
+          <p className="eyebrow">Step {cur + 1} of 3</p>
+          <h2 className="font-display text-2xl leading-tight font-bold text-fg uppercase sm:text-3xl">{step.title}</h2>
+        </div>
+        {bar !== null && (
+          <p className="font-display shrink-0 text-5xl leading-none font-bold text-accent tabular-nums sm:text-6xl">
+            {bar}<span className="text-2xl text-muted sm:text-3xl">%</span>
+          </p>
+        )}
+      </div>
+
+      <ol className="mt-6 grid grid-cols-3 gap-2">
         {STEPS.map(({ id, label, Icon }, i) => {
           const state = i < cur ? 'done' : i === cur ? 'active' : 'todo'
           return (
             <li key={id} aria-current={state === 'active' ? 'step' : undefined}
-              className={clsx('flex items-center gap-3 rounded-2xl border px-3.5 py-3 transition',
-                state === 'active' && 'border-violet-400/60 bg-violet-500/10 text-white',
-                state === 'done' && 'border-emerald-400/30 bg-emerald-500/8 text-emerald-100',
-                state === 'todo' && 'border-white/10 bg-white/3 text-zinc-400')}>
-              <span className={clsx('grid size-9 shrink-0 place-items-center rounded-full',
-                state === 'active' ? 'bg-violet-500 text-white' : state === 'done' ? 'bg-emerald-500/25 text-emerald-200' : 'bg-white/8')}>
-                {state === 'done' ? <Check className="size-4" /> : state === 'active' ? <Loader2 className="size-4 animate-spin" /> : <Icon className="size-4" />}
+              className={clsx('relative flex items-center gap-2.5 rounded-2xl border-2 px-2.5 py-2.5 sm:px-3.5',
+                state === 'active' && 'border-accent bg-accent/12 text-fg',
+                state === 'done' && 'border-good/40 bg-good/8 text-fg',
+                state === 'todo' && 'border-line text-muted')}>
+              {state === 'active' && <BorderBeam size={90} duration={3.5} />}
+              <span className={clsx('grid size-8 shrink-0 place-items-center rounded-full',
+                state === 'active' ? 'bg-accent text-on-accent' : state === 'done' ? 'bg-good text-base' : 'bg-fg/8')}>
+                {state === 'done' ? <Check className="size-4" strokeWidth={3} /> : <Icon className="size-4" />}
               </span>
-              <span className="text-sm leading-tight font-medium">{label}<span className="sr-only">{state === 'done' ? ' (done)' : state === 'active' ? ' (in progress)' : ''}</span></span>
+              <span className="truncate text-xs font-bold sm:text-sm">{label}<span className="sr-only">{state === 'done' ? ' (done)' : state === 'active' ? ' (in progress)' : ''}</span></span>
             </li>
           )
         })}
       </ol>
 
-      <div className="mt-5 flex flex-col gap-2">
-        <div className="flex items-baseline justify-between gap-3 text-sm">
-          <p className="min-w-0 text-zinc-200">{status}</p>
-          {bar !== null && <span className="font-display shrink-0 text-lg font-semibold text-white tabular-nums">{bar}%</span>}
-        </div>
-        <Progress value={bar} />
+      <div className="mt-5">
+        {bar === null
+          ? <Progress value={null} label={step.title} />
+          : (
+            <div role="progressbar" aria-label={step.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={bar}
+              className="inset flex h-16 items-center gap-[2px] px-3 sm:gap-[3px]">
+              {BARS.map((h, i) => (
+                <span key={i} className={clsx('w-full rounded-full transition-colors duration-300', (i + 0.5) / BARS.length * 100 <= bar ? 'bg-accent' : 'bg-fg/15')}
+                  style={{ height: `${h * 80}%` }} />
+              ))}
+            </div>
+          )}
+        <p className="mt-2.5 text-[13px] leading-relaxed break-words text-muted">{status}</p>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-        <Stat Icon={Layers} label="Model" value={info.model ?? dash} />
-        <Stat wide Icon={Cpu} label="Device" value={info.device ? `${info.device}${info.gpu ? ` · ${info.gpu}` : ''}` : dash} />
-        <Stat Icon={Layers} label="Workers" value={info.workers ? String(info.workers) : dash} />
-        <Stat Icon={Gauge} label="Speed" value={info.speed ? `${info.speed.toFixed(1)}× realtime` : dash} />
-        <Stat Icon={Timer} label="Elapsed" value={info.elapsed !== null ? dur(info.elapsed) : dash} />
-        <Stat Icon={Hourglass} label="Time left" value={info.left !== null && info.speed ? `~${dur(info.left)}` : dash} />
+      <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Tile label="Model" value={info.model ?? dash} />
+        <Tile label="Workers" value={info.workers ? String(info.workers) : dash} />
+        <Tile wide label="Device" value={info.device ? `${info.device}${info.gpu ? ` · ${info.gpu}` : ''}` : dash} />
+        <Tile label="Speed" value={info.speed ? `${info.speed.toFixed(1)}×` : dash} />
+        <Tile label="Elapsed" value={info.elapsed !== null ? dur(info.elapsed) : dash} />
+        <Tile wide label="Time left" value={info.left !== null && info.speed ? `~${dur(info.left)}` : dash} />
       </div>
-      <p className="mt-4 text-xs text-zinc-400">The animated backdrop is paused while the GPU is busy.</p>
+      <p className="mt-4 flex items-center gap-1.5 text-xs text-muted"><PauseCircle className="size-3.5" aria-hidden />The animated backdrop is paused while the GPU is busy.</p>
     </section>
   )
 }

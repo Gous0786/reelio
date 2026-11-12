@@ -4,7 +4,8 @@ import { ChevronDown, Loader2, Plus, ScanFace, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import type { FacecamSetting, Rect } from '../lib/facecam'
 import { fmt } from '../lib/format'
-import { Button, Chip, card } from './ui'
+import { Button, Chip } from './ui'
+import { Anim } from './Illustrations'
 
 type Handle = 'move' | 'tl' | 'tr' | 'bl' | 'br'
 const MIN = 0.04
@@ -63,23 +64,27 @@ export default function FacecamPanel({ url, setting, detecting, onChange }: {
       : 'No facecam detected'
   const on = s.enabled && !!s.rect
   return (
-    <section className={clsx(card, 'p-4 sm:p-5')} aria-label="Facecam layout">
+    <section className="slab p-4 sm:p-5" aria-label="Facecam layout">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/8 text-violet-200">
-            {detecting ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <ScanFace className="size-5" aria-hidden />}
+        <div className="flex items-center gap-3.5">
+          {/* mini 9:16 diagram: cam on top, gameplay below when on */}
+          <span aria-hidden className={clsx('relative flex h-14 w-8 shrink-0 flex-col gap-0.5 overflow-hidden rounded-md border-2 p-0.5 transition', on ? 'border-accent' : 'border-line')}>
+            <span className={clsx('rounded-sm transition-all duration-300', on ? 'h-[38%] bg-hot' : 'h-0')} />
+            <span className={clsx('flex-1 rounded-sm transition', on ? 'bg-accent/60' : 'bg-fg/15')} />
           </span>
+          <Anim name="camera" className="hidden size-11 sm:inline-grid" />
           <div>
-            <h2 className="font-display text-sm font-semibold text-white">Facecam layout</h2>
-            <p className="text-xs text-zinc-400" role="status">{status}</p>
+            <p className="eyebrow flex items-center gap-1.5">{detecting ? <Loader2 className="size-3 animate-spin" aria-hidden /> : <ScanFace className="size-3.5" aria-hidden />}Facecam</p>
+            <h2 className="font-display text-base leading-tight font-bold text-fg">Stacked layout</h2>
+            <p className="text-xs text-muted" role="status">{status}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {on ? <Chip tone="good">On: facecam on top</Chip> : <Chip>Off</Chip>}
+          {on ? <Chip tone="accent">On · cam on top</Chip> : <Chip>Off</Chip>}
           <label className={clsx('relative inline-flex cursor-pointer items-center', !s.rect && 'cursor-not-allowed opacity-50')} title="Facecam on top, gameplay below">
             <input type="checkbox" role="switch" className="peer sr-only" checked={on} disabled={!s.rect}
               onChange={e => onChange({ ...s, enabled: e.target.checked })} aria-label="Use facecam layout" />
-            <span className="h-6 w-11 rounded-full bg-white/15 transition peer-checked:bg-violet-500 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-violet-300 after:absolute after:top-0.5 after:left-0.5 after:size-5 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-5" />
+            <span className="h-7 w-13 rounded-full border-2 border-line bg-fg/12 transition peer-checked:border-edge peer-checked:bg-accent peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-zing after:absolute after:top-1 after:left-1 after:size-5 after:rounded-full after:bg-fg after:shadow after:transition peer-checked:after:translate-x-6 peer-checked:after:bg-on-accent" />
           </label>
           {!s.rect && !detecting && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => onChange({ ...s, rect: DEFAULT_RECT, enabled: true })}>Add box manually</Button>}
           {s.rect && <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => commit(null)}>Remove box</Button>}
@@ -91,26 +96,26 @@ export default function FacecamPanel({ url, setting, detecting, onChange }: {
       {open && (s.rect || !detecting) && (
         <div id="facecam-preview" className="mt-4 max-w-md">
           <div className="relative touch-none leading-[0] select-none" ref={stage}>
-            <video ref={vid} src={url} muted preload="metadata" playsInline className="block w-full rounded-xl bg-black ring-1 ring-white/10"
+            <video ref={vid} src={url} muted preload="metadata" playsInline className="block w-full rounded-2xl border-4 border-bezel bg-black"
               onLoadedMetadata={e => { setDur(e.currentTarget.duration); setT(e.currentTarget.duration / 2) }} />
             {rect && (
               <div
-                className={clsx('absolute cursor-move border-2 leading-[0]', s.enabled ? 'border-emerald-400 bg-emerald-400/15' : 'border-zinc-400 bg-zinc-400/15')}
+                className={clsx('absolute cursor-move border-2 leading-[0]', s.enabled ? 'border-accent bg-accent/15' : 'border-white bg-white/15')}
                 onPointerDown={drag('move')}
                 style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` }}
               >
                 {(['tl', 'tr', 'bl', 'br'] as const).map(h => (
-                  <i key={h} onPointerDown={drag(h)} className={clsx('absolute size-3.5 rounded-sm', s.enabled ? 'bg-emerald-400' : 'bg-zinc-400', CORNER[h])} />
+                  <i key={h} onPointerDown={drag(h)} className={clsx('absolute size-3.5 rounded-sm', s.enabled ? 'bg-accent' : 'bg-white', CORNER[h])} />
                 ))}
               </div>
             )}
           </div>
           {dur > 0 && (
             <div className="mt-3 flex items-center gap-3">
-              <span className="text-xs whitespace-nowrap text-zinc-400 tabular-nums">Frame {fmt(t)}</span>
+              <span className="text-xs whitespace-nowrap text-muted tabular-nums">Frame {fmt(t)}</span>
               <Slider.Root className="relative flex h-5 grow touch-none items-center select-none" min={0} max={dur} step={0.5} value={[t]} onValueChange={([v]) => setT(v)}>
-                <Slider.Track className="relative h-1.5 grow rounded-full bg-white/12"><Slider.Range className="absolute h-full rounded-full bg-violet-400/70" /></Slider.Track>
-                <Slider.Thumb aria-label="Pick another frame" className="block size-4 rounded-full bg-white shadow ring-2 ring-violet-500 focus-visible:ring-4 focus-visible:ring-violet-300" />
+                <Slider.Track className="relative h-2 grow rounded-full bg-fg/12"><Slider.Range className="absolute h-full rounded-full bg-accent" /></Slider.Track>
+                <Slider.Thumb aria-label="Pick another frame" className="block size-5 rounded-full border-2 border-edge bg-accent shadow focus-visible:ring-4 focus-visible:ring-zing" />
               </Slider.Root>
             </div>
           )}

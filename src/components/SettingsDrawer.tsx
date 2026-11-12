@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { Cpu, Crop, Eye, EyeOff, KeyRound, Maximize2, Settings, X } from 'lucide-react'
+import { Check, Cpu, Crop, Eye, EyeOff, KeyRound, Maximize2, Palette, Settings, X } from 'lucide-react'
+import * as ToggleGroup from '@radix-ui/react-toggle-group'
+import { THEMES, type ThemeId } from '../lib/theme'
 import type { Fit } from '../lib/media'
 import type { WhisperModel } from '../lib/transcribe'
 import Segmented from './Segmented'
@@ -17,22 +19,23 @@ export interface SettingsProps extends SettingsValues {
   setModelPref: (v: 'auto' | WhisperModel) => void
   setWorkerPref: (v: 'auto' | '1' | '2' | '3') => void
   setFit: (v: Fit) => void
+  theme: ThemeId; setTheme: (t: ThemeId) => void
 }
 
 function Field({ id, label, help, children }: { id?: string; label: string; help?: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-zinc-100">{label}</label>
+      <label htmlFor={id} className="text-sm font-semibold text-fg">{label}</label>
       {children}
-      {help && <p className="text-xs leading-relaxed text-zinc-400">{help}</p>}
+      {help && <p className="text-xs leading-relaxed text-muted">{help}</p>}
     </div>
   )
 }
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/3 p-4">
-      <h3 className="font-display flex items-center gap-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">{icon}{title}</h3>
+    <section className="inset flex flex-col gap-4 p-4">
+      <h3 className="eyebrow flex items-center gap-2">{icon}{title}</h3>
       {children}
     </section>
   )
@@ -45,9 +48,9 @@ function SecretInput({ id, value, onChange, placeholder }: { id: string; value: 
       <input
         id={id} type={show ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)}
         placeholder={placeholder} autoComplete="off" spellCheck={false}
-        className="h-10 w-full rounded-xl border border-white/10 bg-black/30 pr-11 pl-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-violet-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"
+        className="h-11 w-full rounded-full border-2 border-line bg-surface pr-12 pl-4 text-sm text-fg placeholder:text-muted/70 focus:border-accent focus:outline-none"
       />
-      <IconButton size="sm" label={show ? 'Hide key' : 'Show key'} onClick={() => setShow(s => !s)} className="absolute top-1 right-1">
+      <IconButton size="sm" label={show ? 'Hide key' : 'Show key'} onClick={() => setShow(s => !s)} className="absolute top-1.5 right-1.5">
         {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
       </IconButton>
     </div>
@@ -63,17 +66,31 @@ export default function SettingsDrawer(p: SettingsProps) {
         </Button>
       </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/70" />
+        <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/55 backdrop-blur-sm" />
         <Dialog.Content
-          className="animate-drawer-in fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-white/10 bg-[#0b0b12] shadow-2xl focus:outline-none"
+          className="animate-drawer-in slab fixed inset-y-2 right-2 z-50 flex w-[calc(100%-1rem)] max-w-md flex-col overflow-hidden focus:outline-none"
           aria-describedby={undefined}
         >
-          <header className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-            <Dialog.Title className="font-display text-lg font-semibold text-white">Settings</Dialog.Title>
+          <header className="flex items-center justify-between border-b border-line px-5 py-4">
+            <Dialog.Title className="font-display text-2xl font-bold text-fg uppercase">Settings</Dialog.Title>
             <Dialog.Close asChild><IconButton label="Close settings"><X className="size-5" /></IconButton></Dialog.Close>
           </header>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+            <Section icon={<Palette className="size-4" />} title="Theme">
+              <ToggleGroup.Root type="single" value={p.theme} onValueChange={v => { if (v) p.setTheme(v as ThemeId) }} aria-label="Colour theme" className="grid grid-cols-3 gap-2">
+                {THEMES.map(t => (
+                  <ToggleGroup.Item key={t.id} value={t.id} className="group relative flex flex-col overflow-hidden rounded-2xl border-2 border-line text-left transition data-[state=on]:border-fg">
+                    <span aria-hidden className="relative block h-14" style={{ background: t.swatch[2] }}>
+                      <span className="absolute bottom-2 left-2 h-5 w-9 rounded-full" style={{ background: t.swatch[0] }} />
+                      <span className="absolute top-2 right-2 size-4 rounded-full" style={{ background: t.swatch[1] }} />
+                    </span>
+                    <span className="flex items-center justify-between px-2.5 py-1.5 text-xs font-bold text-fg">{t.name}<Check className="size-3.5 opacity-0 group-data-[state=on]:opacity-100" aria-hidden /></span>
+                  </ToggleGroup.Item>
+                ))}
+              </ToggleGroup.Root>
+            </Section>
+
             <Section icon={<KeyRound className="size-4" />} title="LLM keys">
               <Field id="gemini" label="Gemini API key" help="Optional. Tried first when set. Stays in this browser's local storage.">
                 <SecretInput id="gemini" value={p.geminiKey} onChange={p.setGeminiKey} placeholder="AIza… / AQ.…" />
@@ -107,7 +124,7 @@ export default function SettingsDrawer(p: SettingsProps) {
               </Field>
             </Section>
           </div>
-          <footer className="border-t border-white/10 px-5 py-3 text-xs text-zinc-400">Changes save automatically.</footer>
+          <footer className="border-t border-line px-5 py-3 text-xs text-muted">Changes save automatically.</footer>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

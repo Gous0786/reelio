@@ -1,14 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { Check, Clock, Copy, Download, Loader2, Quote } from 'lucide-react'
+import { Check, Clock, Copy, Download, Film, Loader2 } from 'lucide-react'
 import type { Clip } from '../lib/types'
 import { exportClip, type Fit } from '../lib/media'
 import type { Rect } from '../lib/facecam'
-import { outName, save } from '../lib/format'
+import { fmt, outName, save } from '../lib/format'
 import ClipPlayer, { type PlayerHandle } from './ClipPlayer'
 import TrimSlider from './TrimSlider'
 import { RankBreakdown } from './RankBreakdown'
-import { Alert, Button, Chip, Progress, card } from './ui'
+import { Alert, Button, Chip } from './ui'
+
+/** Ring gauge for the 0-100 clip score. */
+function ScoreRing({ score }: { score: number }) {
+  const r = 22, c = 2 * Math.PI * r
+  return (
+    <span className="relative grid size-14 shrink-0 place-items-center" role="img" aria-label={`Score ${score} out of 100`}>
+      <svg viewBox="0 0 52 52" className="absolute inset-0 -rotate-90" aria-hidden>
+        <circle cx="26" cy="26" r={r} fill="none" strokeWidth="5" className="stroke-fg/12" />
+        <circle cx="26" cy="26" r={r} fill="none" strokeWidth="5" strokeLinecap="round"
+          className={score >= 80 ? 'stroke-accent' : score >= 60 ? 'stroke-zing' : 'stroke-hot'}
+          strokeDasharray={c} strokeDashoffset={c * (1 - Math.max(0, Math.min(100, score)) / 100)} />
+      </svg>
+      <span className="font-display text-lg leading-none font-bold text-fg tabular-nums">{score}</span>
+    </span>
+  )
+}
 
 export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTrim, onRendering }: {
   rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; locked: boolean
@@ -22,6 +38,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
   const [dur, setDur] = useState(NaN) // source duration, from the player's metadata
   const [playhead, setPlayhead] = useState<number | null>(null)
   const [full, setFull] = useState(false) // enlarged preview open
+  const [saved, setSaved] = useState(false) // brief 'Saved' state after a download
   const orig = useRef({ start: clip.start, end: clip.end })
   const rendering = useRef(false)
   const setRendering = (a: boolean) => { rendering.current = a; onRendering(a) }
@@ -49,7 +66,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
   }
   const download = async () => {
     setErr(''); setPct(0); setRendering(true)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc), outName(file, rank)) }
+    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc), outName(file, rank)); setSaved(true); setTimeout(() => setSaved(false), 2500) }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
     setPct(null); setRendering(false)
   }
@@ -58,18 +75,21 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
     setCopied(true); setTimeout(() => setCopied(false), 1500)
   }
   const score = Math.round(clip.score)
-  const tone = score >= 80 ? 'good' : score >= 60 ? 'accent' : 'neutral'
 
   return (
-    <article className={`@container ${card} overflow-hidden`} aria-label={`Clip ${rank}: ${clip.title}`}>
+    <article id={`clip-${rank}`} tabIndex={-1} className="@container slab scroll-mt-6 overflow-hidden outline-none focus-visible:outline-3 focus-visible:outline-zing" aria-label={`Clip ${rank}: ${clip.title}`}>
       <div className="flex flex-col gap-5 p-4 @lg:flex-row @lg:p-5">
-        <div className="mx-auto w-full max-w-65 shrink-0 @lg:mx-0 @lg:w-47.5">
-          <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead}
-            onExpand={() => { player.current?.pause(); setFull(true) }} />
+        <div className="mx-auto w-full max-w-64 shrink-0 @lg:mx-0 @lg:w-52">
+          {/* phone bezel */}
+          <div className="relative rounded-[1.9rem] border-[7px] border-bezel bg-bezel shadow-xl">
+            <span aria-hidden className="absolute top-1.5 left-1/2 z-20 h-1.5 w-12 -translate-x-1/2 rounded-full bg-bezel/90" />
+            <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead}
+              onExpand={() => { player.current?.pause(); setFull(true) }} />
+          </div>
           <Dialog.Root open={full} onOpenChange={setFull}>
             <Dialog.Portal>
-              <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/55 backdrop-blur-2xl" />
-              <Dialog.Content aria-describedby={undefined} className="animate-overlay-in fixed top-1/2 left-1/2 z-50 w-[min(94vw,calc(88vh*9/16))] -translate-x-1/2 -translate-y-1/2 focus:outline-none">
+              <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/60 backdrop-blur-2xl" />
+              <Dialog.Content aria-describedby={undefined} className="animate-overlay-in fixed top-1/2 left-1/2 z-50 w-[min(94vw,calc(88vh*9/16))] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] border-8 border-bezel bg-bezel shadow-2xl focus:outline-none">
                 <Dialog.Title className="sr-only">Preview of clip {rank}: {clip.title}</Dialog.Title>
                 <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} autoPlay startAt={playhead ?? undefined} onClose={() => setFull(false)} />
               </Dialog.Content>
@@ -77,17 +97,22 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
           </Dialog.Root>
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-display grid size-8 place-items-center rounded-full bg-white/8 text-sm font-semibold text-zinc-200 ring-1 ring-white/10">#{rank}</span>
-            <Chip tone={tone} className="font-display text-sm"><span className="tabular-nums font-semibold">{score}</span><span className="text-[11px] opacity-70">score</span></Chip>
-            <Chip><Clock className="size-3" aria-hidden />{(clip.end - clip.start).toFixed(1)}s</Chip>
+        <div className="flex min-w-0 flex-1 flex-col gap-3.5">
+          <div className="flex items-center gap-3">
+            <span className="font-display text-5xl leading-none font-bold text-transparent tabular-nums [-webkit-text-stroke:2px_var(--fg)]" aria-hidden>
+              {String(rank).padStart(2, '0')}
+            </span>
+            <ScoreRing score={score} />
+            <div className="ml-auto flex flex-col items-end gap-1">
+              <Chip tone="accent"><Clock className="size-3" aria-hidden />{(clip.end - clip.start).toFixed(1)}s</Chip>
+              <Chip><Film className="size-3" aria-hidden /><span className="tabular-nums">{fmt(clip.start)}–{fmt(clip.end)}</span></Chip>
+            </div>
           </div>
 
           <div>
-            <h3 className="font-display text-lg leading-snug font-semibold text-white">{clip.title}</h3>
-            <p className="mt-1 flex gap-1.5 text-sm text-zinc-200 italic"><Quote className="mt-0.5 size-3.5 shrink-0 text-violet-300" aria-hidden /><span>{clip.hook}</span></p>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-zinc-400">{clip.reason}</p>
+            <h3 className="font-display text-xl leading-snug font-bold text-fg">{clip.title}</h3>
+            <blockquote className="mt-2 border-l-4 border-hot pl-3 text-[15px] leading-snug font-medium text-fg">“{clip.hook}”</blockquote>
+            <p className="mt-2 text-[13px] leading-relaxed text-muted">{clip.reason}</p>
           </div>
 
           {clip.rank && <RankBreakdown rank={clip.rank} />}
@@ -100,11 +125,13 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
           />
 
           {(clip.caption || clip.hashtags?.length) && (
-            <div className="rounded-2xl border border-white/10 bg-white/4 p-3 text-[13px]">
-              {clip.caption && <p className="text-zinc-200">{clip.caption}</p>}
-              {clip.hashtags?.length ? <p className="mt-1 text-violet-300">{clip.hashtags.join(' ')}</p> : null}
+            <div className="inset p-3.5 text-[13px]">
+              {clip.caption && <p className="text-fg">{clip.caption}</p>}
+              {clip.hashtags?.length ? (
+                <p className="mt-2 flex flex-wrap gap-1.5">{clip.hashtags.map(h => <span key={h} className="rounded-full bg-hot/12 px-2 py-0.5 text-xs font-semibold text-hot">{h}</span>)}</p>
+              ) : null}
               <Button size="sm" variant="ghost" className="mt-2 -ml-2" onClick={copy}
-                icon={copied ? <Check className="size-3.5 text-emerald-300" /> : <Copy className="size-3.5" />}>
+                icon={copied ? <Check className="size-3.5 text-good" /> : <Copy className="size-3.5" />}>
                 {copied ? 'Copied' : 'Copy caption'}
               </Button>
               <span className="sr-only" role="status">{copied ? 'Caption copied to clipboard' : ''}</span>
@@ -112,11 +139,15 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
           )}
 
           <div className="mt-auto flex flex-col gap-2 pt-1">
-            {pct !== null && <Progress value={pct} />}
-            <Button variant="primary" disabled={pct !== null || locked} onClick={download}
-              icon={pct === null ? <Download className="size-4" /> : <Loader2 className="size-4 animate-spin" />}>
-              {pct === null ? 'Download MP4' : `Rendering… ${pct}%`}
+            <Button variant="primary" size="lg" disabled={pct !== null || locked} onClick={download} className="overflow-hidden"
+              aria-label={pct !== null ? `Rendering clip ${rank}, ${pct}%` : saved ? `Clip ${rank} saved` : `Download clip ${rank} as MP4`}>
+              {pct !== null && <span aria-hidden className="absolute inset-y-0 left-0 bg-on-accent/20 transition-[width] duration-300" style={{ width: `${pct}%` }} />}
+              <span className="relative inline-flex items-center gap-2">
+                {pct !== null ? <Loader2 className="size-5 animate-spin" /> : saved ? <Check className="size-5" strokeWidth={3} /> : <Download className="size-5" />}
+                {pct !== null ? `Rendering… ${pct}%` : saved ? 'Saved to downloads' : 'Download MP4'}
+              </span>
             </Button>
+            <span className="sr-only" role="status">{saved ? `Clip ${rank} saved` : ''}</span>
             {err && <Alert tone="error">{err}</Alert>}
           </div>
         </div>
