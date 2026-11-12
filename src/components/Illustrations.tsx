@@ -12,7 +12,7 @@ import dizzy from '../assets/lottie/dizzy.json?url'
 import camera from '../assets/lottie/camera.json?url'
 
 /* Animated illustrations: Noto Emoji Animation by Google (https://googlefonts.github.io/noto-emoji-animation/),
- * licensed CC BY 4.0 (credited in the page footer). Each Lottie file is fetched only when its slot scrolls
+ * licensed CC BY 4.0 (credited under Credits and in THIRD_PARTY_NOTICES.md). Each Lottie file is fetched only when its slot scrolls
  * into view, and the light SVG-only lottie-web player (MIT) is a separate lazy chunk. Under
  * prefers-reduced-motion the first frame is shown and nothing plays. While loading, the plain emoji glyph
  * stands in, so there is no layout shift. */

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import * as m from 'motion/react-m'
-import { Crop, Database, Maximize2, FilePlus2, FileVideo, Play, RefreshCw, ScanText, Sparkles } from 'lucide-react'
+import { CircleHelp, Crop, Database, KeyRound, Maximize2, FilePlus2, FileVideo, Play, RefreshCw, ScanText, Sparkles } from 'lucide-react'
 import type { Clip, Loud, Segment, Word } from './lib/types'
 import { findClips } from './lib/llm'
 import { findRankedClips } from './lib/rank'
@@ -26,6 +26,8 @@ import { useTheme } from './lib/theme'
 import ProgressView, { NO_INFO, type RunInfo, type Stage } from './components/ProgressView'
 import Segmented from './components/Segmented'
 import SettingsDrawer from './components/SettingsDrawer'
+import CreditsDialog from './components/Credits'
+import { HowToDialog, HowToSection } from './components/HowTo'
 import SubtitleSource from './components/SubtitleSource'
 import { Alert, Button, Chip } from './components/ui'
 
@@ -48,6 +50,10 @@ export default function App() {
   const [all, setAll] = useState<{ i: number; n: number; p: number } | null>(null) // "download all" progress
   const [allErr, setAllErr] = useState('')
   const [renders, setRenders] = useState(0) // single-clip exports in flight
+  const [needKey, setNeedKey] = useState(false) // transcript is ready but no LLM key is set yet
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [howTo, setHowTo] = useState(false)
+  const [credits, setCredits] = useState(false)
   const [allDone, setAllDone] = useState(false) // brief 'all saved' state (presentation only)
   const [theme, setTheme] = useTheme()
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
@@ -64,6 +70,7 @@ export default function App() {
   const [capSet, setCapSet] = useCaptionSettings()
   const captions: CaptionConfig | null = capSet.on && words.length ? { words, style: capSet.style } : null
   const unsupported = checkSupport()
+  const hasKey = !!(apiKey.trim() || geminiKey.trim())
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
   useEffect(() => { localStorage.setItem('gemini_key', geminiKey) }, [geminiKey])
@@ -71,6 +78,10 @@ export default function App() {
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
 
   const runClips = async (segs: Segment[], force = false) => {
+    if (!hasKey) { // no key: ask for one instead of sending a request that can only fail
+      setNeedKey(true); setClips([]); setError(null); setAnsweredBy(''); setStage('done'); return
+    }
+    setNeedKey(false)
     setStage('clips'); setError(null); setAnsweredBy(''); setStatus('Asking the LLM for the best moments…')
     try {
       const o = {
@@ -166,7 +177,7 @@ export default function App() {
 
   const start = async (f: File, force = false, whisper = false) => {
     void runFacecam(f)
-    setSubs(null); scan.current = null
+    setSubs(null); scan.current = null; setNeedKey(false)
     setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setWords([]); loud.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
@@ -244,7 +255,7 @@ export default function App() {
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null; setSubs(null); scan.current = null; side.current = null }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null; setSubs(null); scan.current = null; side.current = null; setNeedKey(false) }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
@@ -280,7 +291,11 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <ThemeSwitcher value={theme} onChange={setTheme} />
-              <SettingsDrawer {...{ geminiKey, apiKey, modelPref, workerPref, fit, setGeminiKey, setApiKey, setModelPref, setWorkerPref, setFit, theme, setTheme }} />
+              <Button variant="secondary" size="sm" icon={<CircleHelp className="size-4" />} aria-label="How to use Reelio" onClick={() => setHowTo(true)}>
+                <span className="hidden sm:inline">How to</span>
+              </Button>
+              <SettingsDrawer {...{ geminiKey, apiKey, modelPref, workerPref, fit, setGeminiKey, setApiKey, setModelPref, setWorkerPref, setFit, theme, setTheme }}
+                open={settingsOpen} onOpenChange={setSettingsOpen} onHowTo={() => { setSettingsOpen(false); setHowTo(true) }} onCredits={() => setCredits(true)} />
             </div>
           </header>
 
@@ -291,6 +306,7 @@ export default function App() {
               {stage === 'idle' && !unsupported && (
                 <m.div key="idle" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}>
                   <DropZone onFile={onFiles} />
+                  <div className="mt-5"><HowToSection onSettings={() => setSettingsOpen(true)} onCredits={() => setCredits(true)} /></div>
                 </m.div>
               )}
             </AnimatePresence>
@@ -303,7 +319,7 @@ export default function App() {
                     <p className="font-display truncate text-base font-bold text-fg" title={file.name}>{file.name}</p>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       <Chip>{(file.size / 1048576).toFixed(file.size > 1e9 ? 0 : 1)} MB</Chip>
-                      {stage === 'done' && <Chip tone="accent"><Sparkles className="size-3" aria-hidden />{clips.length} clip{clips.length === 1 ? '' : 's'}</Chip>}
+                      {stage === 'done' && !needKey && <Chip tone="accent"><Sparkles className="size-3" aria-hidden />{clips.length} clip{clips.length === 1 ? '' : 's'}</Chip>}
                       {subs && stage === 'done' && <SubtitleSource label={subs.label} tracks={subs.tracks} trackId={subs.trackId} onPick={switchTrack} disabled={busy} />}
                       {cached && stage !== 'model' && <Chip tone="good"><Database className="size-3" aria-hidden />Transcript from cache</Chip>}
                       {answeredBy && stage === 'done' && <Chip className="max-w-full"><span className="truncate" title={answeredBy}>via {answeredBy}</span></Chip>}
@@ -311,7 +327,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {!busy && segments.current && (
+                  {!busy && segments.current && !needKey && (
                     <Button size="sm" title="Ask the LLM again, ignoring the cached clip result" icon={<RefreshCw className="size-3.5" />} onClick={() => runClips(segments.current!, true)}>Find clips again</Button>
                   )}
                   {!busy && (
@@ -380,7 +396,20 @@ export default function App() {
                 )}
                 {allErr && <Alert tone="error">{allErr}</Alert>}
 
-                {clips.length === 0 && (
+                {clips.length === 0 && needKey && (
+                  <div className="slab flex flex-col items-center gap-3 px-6 py-12 text-center" role="status">
+                    <Anim name="sparkles" className="size-24" />
+                    <p className="eyebrow">One more step</p>
+                    <h2 className="font-display text-3xl font-bold text-fg uppercase">Add a free key to find clips</h2>
+                    <p className="max-w-md text-sm text-muted">Your video is transcribed. Picking the best moments needs one free API key, from Gemini or OpenRouter. Paste it in Settings, then press Find clips.</p>
+                    <div className="mt-2 flex flex-wrap justify-center gap-2">
+                      <Button variant={hasKey ? 'secondary' : 'primary'} size="lg" icon={<KeyRound className="size-4" />} onClick={() => setSettingsOpen(true)}>Open Settings</Button>
+                      <Button size="lg" icon={<CircleHelp className="size-4" />} onClick={() => setHowTo(true)}>How to get a key</Button>
+                      <Button variant={hasKey ? 'primary' : 'secondary'} size="lg" disabled={!hasKey || !segments.current} icon={<Sparkles className="size-4" />} onClick={() => runClips(segments.current!)}>Find clips</Button>
+                    </div>
+                  </div>
+                )}
+                {clips.length === 0 && !needKey && (
                   <div className="slab flex flex-col items-center gap-3 px-6 py-12 text-center">
                     <Anim name="search" className="size-24" />
                     <p className="eyebrow">Nothing picked</p>
@@ -404,11 +433,9 @@ export default function App() {
 
           <footer className="slab mx-auto mt-10 flex max-w-3xl flex-col items-center gap-1 rounded-3xl px-5 py-3 text-center text-xs text-muted">
             <p className="font-semibold text-fg">Video and audio stay on your device. Only the transcript text is sent to the LLM.</p>
-            <p>
-              Animated emoji: <a className="underline underline-offset-2 hover:text-fg" href="https://googlefonts.github.io/noto-emoji-animation/" target="_blank" rel="noreferrer">Noto Emoji Animation</a> by Google, <a className="underline underline-offset-2 hover:text-fg" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>.
-              Background and effects adapted from <a className="underline underline-offset-2 hover:text-fg" href="https://www.vengenceui.com" target="_blank" rel="noreferrer">Vengeance UI</a> (MIT).
-            </p>
           </footer>
+          <HowToDialog open={howTo} onOpenChange={setHowTo} onSettings={() => { setHowTo(false); setSettingsOpen(true) }} onCredits={() => setCredits(true)} />
+          <CreditsDialog open={credits} onOpenChange={setCredits} />
         </div>
       </LazyMotion>
     </MotionConfig>

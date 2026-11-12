@@ -3,7 +3,6 @@ import { getClips, putClips } from './cache';
 
 const MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const PROXY_URL = '/api/chat';
 const FALLBACK_CHARS = 45000; // chunk size for small-context models
 const OPENROUTER_MAX_CHARS = 150000; // cap per request on free models (slow/flaky with huge prompts)
 const CHARS_PER_TOKEN = 3; // conservative for timestamped transcript lines
@@ -144,8 +143,7 @@ type Delta = { error?: { code?: number }; choices?: { delta?: { content?: string
 
 // Streams one completion and returns the answer text; throws with a readable cause on failure.
 async function callModel(m: ModelInfo, prompt: string, opts: FindClipsOptions, label: string, noThink: boolean): Promise<string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }; // only called with a key
   const ctrl = new AbortController();
   const hard = setTimeout(() => ctrl.abort(new Error(`no answer within ${ATTEMPT_TIMEOUT_MS / 1000}s`)), ATTEMPT_TIMEOUT_MS);
   let stall: ReturnType<typeof setTimeout> | undefined;
@@ -156,7 +154,7 @@ async function callModel(m: ModelInfo, prompt: string, opts: FindClipsOptions, l
   const t0 = Date.now();
   try {
     alive();
-    const res = await fetch(opts.apiKey ? CHAT_URL : PROXY_URL, {
+    const res = await fetch(CHAT_URL, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -339,10 +337,15 @@ export async function askLLM(prompt: string, textLen: number, opts: FindClipsOpt
       note = `Gemini failed: ${msg.slice(0, 160)}`;
       errors.push(`Gemini ${GEMINI_MODEL}: ${msg}`);
       console.warn(`[reelio] Gemini ${GEMINI_MODEL} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${msg}`);
-      opts.onProgress?.(`${label}: Gemini failed (${msg.slice(0, 80)}), falling back to OpenRouter…`);
+      opts.onProgress?.(`${label}: Gemini failed (${msg.slice(0, 80)})${opts.apiKey ? ', falling back to OpenRouter…' : ''}`);
     }
   }
 
+  if (!opts.apiKey) { // no OpenRouter key: nothing else to try (and no request that could only fail)
+    throw new Error(errors.length ? `${label}: ${errors.join('; ')}. Add an OpenRouter key in Settings as a fallback.`
+      : opts.geminiKey ? `${label}: this transcript is too long for Gemini in one request. Add an OpenRouter key in Settings as well.`
+      : `${label}: add a free Gemini or OpenRouter key in Settings first.`);
+  }
   const fit = (await candidates()).filter(m => budget(m) >= textLen).slice(0, MAX_ATTEMPTS);
   if (!fit.length && textLen > FALLBACK_CHARS) throw new NoFit(note); // no free model takes this much at once
   if (!fit.length) throw new Error(`${label}: no usable free models left this session`);
@@ -466,7 +469,7 @@ export async function findCandidates(segs: Segment[], opts: FindClipsOptions, ma
   // Chunk to the context window of the model most likely to answer: Gemini, else the first OpenRouter candidate.
   let chunkChars = FALLBACK_CHARS;
   if (opts.geminiKey && Date.now() >= geminiOffUntil) chunkChars = GEMINI_CHARS;
-  else {
+  else if (opts.apiKey) {
     try { const first = (await candidates())[0]; if (first) chunkChars = Math.max(FALLBACK_CHARS, budget(first)); } catch { /* model list unavailable: askLLM reports it */ }
   }
   const chunks = chunkSegments(segs, chunkChars);

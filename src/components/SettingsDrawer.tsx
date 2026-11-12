@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { Check, Cpu, Crop, Eye, EyeOff, KeyRound, Maximize2, Palette, Settings, X } from 'lucide-react'
+import { Check, CircleHelp, Cpu, Crop, Eye, EyeOff, KeyRound, Maximize2, Palette, Settings, X } from 'lucide-react'
 import * as ToggleGroup from '@radix-ui/react-toggle-group'
 import { THEMES, type ThemeId } from '../lib/theme'
 import type { Fit } from '../lib/media'
@@ -20,6 +20,8 @@ export interface SettingsProps extends SettingsValues {
   setWorkerPref: (v: 'auto' | '1' | '2' | '3') => void
   setFit: (v: Fit) => void
   theme: ThemeId; setTheme: (t: ThemeId) => void
+  open?: boolean; onOpenChange?: (o: boolean) => void // controlled, so other screens can open Settings
+  onHowTo?: () => void; onCredits?: () => void
 }
 
 function Field({ id, label, help, children }: { id?: string; label: string; help?: string; children: ReactNode }) {
@@ -59,7 +61,7 @@ function SecretInput({ id, value, onChange, placeholder }: { id: string; value: 
 
 export default function SettingsDrawer(p: SettingsProps) {
   return (
-    <Dialog.Root>
+    <Dialog.Root open={p.open} onOpenChange={p.onOpenChange}>
       <Dialog.Trigger asChild>
         <Button variant="secondary" size="sm" icon={<Settings className="size-4" />} aria-label="Open settings">
           <span className="hidden sm:inline">Settings</span>
@@ -92,12 +94,14 @@ export default function SettingsDrawer(p: SettingsProps) {
             </Section>
 
             <Section icon={<KeyRound className="size-4" />} title="LLM keys">
-              <Field id="gemini" label="Gemini API key" help="Optional. Tried first when set. Stays in this browser's local storage.">
+              <Field id="gemini" label="Gemini API key" help="Free from Google AI Studio. Tried first when set. Stays in this browser and is sent only to Google.">
                 <SecretInput id="gemini" value={p.geminiKey} onChange={p.setGeminiKey} placeholder="AIza… / AQ.…" />
               </Field>
-              <Field id="openrouter" label="OpenRouter API key" help="Optional. Empty uses the built-in /api/chat proxy.">
+              <Field id="openrouter" label="OpenRouter API key" help="Free from OpenRouter. Used when there is no Gemini key or Gemini fails. Stays in this browser and is sent only to OpenRouter.">
                 <SecretInput id="openrouter" value={p.apiKey} onChange={p.setApiKey} placeholder="sk-or-…" />
               </Field>
+              <p className="text-xs leading-relaxed text-muted">One key is enough. Clips can't be found without one.</p>
+              {p.onHowTo && <Button size="sm" className="self-start" icon={<CircleHelp className="size-3.5" />} onClick={p.onHowTo}>How to get a free key</Button>}
             </Section>
 
             <Section icon={<Cpu className="size-4" />} title="Transcription">
@@ -124,7 +128,10 @@ export default function SettingsDrawer(p: SettingsProps) {
               </Field>
             </Section>
           </div>
-          <footer className="border-t border-line px-5 py-3 text-xs text-muted">Changes save automatically.</footer>
+          <footer className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
+            <span>Changes save automatically.</span>
+            {p.onCredits && <button type="button" onClick={p.onCredits} className="underline underline-offset-2 hover:text-fg">Credits</button>}
+          </footer>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
