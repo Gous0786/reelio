@@ -1,4 +1,6 @@
 export interface Segment { start: number; end: number; text: string }
+/** One spoken word with its own timing (from Whisper word timestamps), at absolute times in the video. */
+export interface Word { start: number; end: number; text: string }
 export interface Clip { start: number; end: number; title: string; hook: string; reason: string; score: number; caption?: string; hashtags?: string[]; rank?: RankInfo }
 export interface FindClipsOptions {
   apiKey?: string // OpenRouter

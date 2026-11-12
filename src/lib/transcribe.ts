@@ -1,10 +1,10 @@
-import type { Segment } from './types'
+import type { Segment, Word } from './types'
 
 export type WhisperModel = 'onnx-community/whisper-base' | 'onnx-community/whisper-tiny'
 export type Device = 'webgpu' | 'wasm'
 
 /** Starts the Whisper worker and resolves once the model is loaded. `run` transcribes one slice (buffer is
- *  transferred, not copied) and returns segments at absolute times (offset applied). On a slice error the
+ *  transferred, not copied) and returns segments and words at absolute times (offset applied). On a slice error the
  *  rejected Error carries the buffer back in `.audio` so it can be retried. */
 export function createTranscriber(model: WhisperModel, onDownload: (pct: number) => void) {
   const worker = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), { type: 'module' })
@@ -25,7 +25,7 @@ export function createTranscriber(model: WhisperModel, onDownload: (pct: number)
     device,
     gpu,
     run: (audio: Float32Array, offset: number) =>
-      call<{ segments: Segment[] }>({ type: 'run', audio, offset }, [audio.buffer]).then(r => r.segments),
+      call<{ segments: Segment[]; words: Word[] }>({ type: 'run', audio, offset }, [audio.buffer]),
     close: () => worker.terminate(),
   }))
 }

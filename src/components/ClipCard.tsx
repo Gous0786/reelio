@@ -4,6 +4,7 @@ import { Check, Clock, Copy, Download, Film, Loader2 } from 'lucide-react'
 import type { Clip } from '../lib/types'
 import { exportClip, type Fit } from '../lib/media'
 import type { Rect } from '../lib/facecam'
+import type { CaptionConfig } from '../lib/captions'
 import { fmt, outName, save } from '../lib/format'
 import ClipPlayer, { type PlayerHandle } from './ClipPlayer'
 import TrimSlider from './TrimSlider'
@@ -26,8 +27,8 @@ function ScoreRing({ score }: { score: number }) {
   )
 }
 
-export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTrim, onRendering }: {
-  rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; locked: boolean
+export default function ClipCard({ rank, clip, file, url, fit, fc, captions, locked, onTrim, onRendering }: {
+  rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; captions: CaptionConfig | null; locked: boolean
   onTrim: (t: { start: number; end: number }) => void
   onRendering: (active: boolean) => void
 }) {
@@ -66,7 +67,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
   }
   const download = async () => {
     setErr(''); setPct(0); setRendering(true)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc), outName(file, rank)); setSaved(true); setTimeout(() => setSaved(false), 2500) }
+    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc, captions), outName(file, rank)); setSaved(true); setTimeout(() => setSaved(false), 2500) }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
     setPct(null); setRendering(false)
   }
@@ -83,7 +84,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
           {/* phone bezel */}
           <div className="relative rounded-[1.9rem] border-[7px] border-bezel bg-bezel shadow-xl">
             <span aria-hidden className="absolute top-1.5 left-1/2 z-20 h-1.5 w-12 -translate-x-1/2 rounded-full bg-bezel/90" />
-            <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} handle={player} onDuration={setDur} onTime={setPlayhead}
+            <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} captions={captions} handle={player} onDuration={setDur} onTime={setPlayhead}
               onExpand={() => { player.current?.pause(); setFull(true) }} />
           </div>
           <Dialog.Root open={full} onOpenChange={setFull}>
@@ -91,7 +92,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, locked, onTri
               <Dialog.Overlay className="animate-overlay-in fixed inset-0 z-40 bg-black/60 backdrop-blur-2xl" />
               <Dialog.Content aria-describedby={undefined} className="animate-overlay-in fixed top-1/2 left-1/2 z-50 w-[min(94vw,calc(88vh*9/16))] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] border-8 border-bezel bg-bezel shadow-2xl focus:outline-none">
                 <Dialog.Title className="sr-only">Preview of clip {rank}: {clip.title}</Dialog.Title>
-                <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} autoPlay startAt={playhead ?? undefined} onClose={() => setFull(false)} />
+                <ClipPlayer url={url} clip={clip} fit={fit} fc={fc} captions={captions} autoPlay startAt={playhead ?? undefined} onClose={() => setFull(false)} />
               </Dialog.Content>
             </Dialog.Portal>
           </Dialog.Root>
