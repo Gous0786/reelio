@@ -9,6 +9,7 @@ import { LoudnessMeter } from './lib/signals'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
 import { createPool, type WhisperModel } from './lib/transcribe'
+import { cleanCues, cuesToTranscript, parseSidecar, pickTrack, scanSubtitles, trackLabel, usable, type SubScan, type SubTrack } from './lib/subtitles'
 import { detectFacecam, type FacecamSetting } from './lib/facecam'
 import type { CaptionConfig } from './lib/captions'
 import { facecamKey, getFacecam, putFacecam } from './lib/facecamStore'
@@ -25,6 +26,7 @@ import { useTheme } from './lib/theme'
 import ProgressView, { NO_INFO, type RunInfo, type Stage } from './components/ProgressView'
 import Segmented from './components/Segmented'
 import SettingsDrawer from './components/SettingsDrawer'
+import SubtitleSource from './components/SubtitleSource'
 import { Alert, Button, Chip } from './components/ui'
 
 export default function App() {
@@ -51,6 +53,10 @@ export default function App() {
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
   const [words, setWords] = useState<Word[]>([]) // word timings for the captions
+  // set when the transcript comes from subtitles instead of Whisper
+  const [subs, setSubs] = useState<{ tracks: SubTrack[]; trackId: string; label: string } | null>(null)
+  const scan = useRef<SubScan | null>(null) // raw cues of every text track (switching track needs no new scan)
+  const side = useRef<File | null>(null) // sidecar .srt/.vtt dropped with the video
   const [fc, setFc] = useState<FacecamSetting | null>(null) // facecam setting for the current video
   const [fcBusy, setFcBusy] = useState(false)
   const fcAbort = useRef<AbortController | null>(null)
@@ -95,14 +101,79 @@ export default function App() {
   }
   const setFacecam = (s: FacecamSetting) => { setFc(s); if (file) putFacecam(facecamKey(file), s) }
 
-  const start = async (f: File, force = false) => {
+  const subsKey = (f: File) => {
+    const sc = side.current
+    return cacheKey(f, sc ? `subs:${sc.name}:${sc.size}:${sc.lastModified}` : 'subs') // the key records the source
+  }
+  /** Subtitle path: use embedded text subtitles (or the sidecar file) as the transcript, with only a fast audio pass for
+   *  the loudness timeline. Returns false (after saying why) when there are none / they look unusable: Whisper then runs. */
+  const fromSubtitles = async (f: File, audio: Awaited<ReturnType<typeof openAudio>>, force: boolean): Promise<boolean> => {
+    const key = subsKey(f)
+    setInfo(i => ({ ...i, model: 'Subtitles', device: 'Audio pass only, no speech model', subs: '' }))
+    setStage('model'); setStatus('Looking for subtitles…')
+    const hit = force ? undefined : await getTranscript(key)
+    if (hit?.subs && hit.segs.length) {
+      scan.current = { tracks: hit.subs.tracks, cues: hit.subs.cues }
+      const t = hit.subs.tracks.find(x => x.id === hit.subs!.trackId)!
+      segments.current = hit.segs; loud.current = hit.loud; setWords(hit.words); setCached(true)
+      const label = `${trackLabel(t)} · ${hit.segs.length.toLocaleString()} cues`
+      setSubs({ tracks: hit.subs.tracks, trackId: t.id, label }); setInfo(i => ({ ...i, subs: label }))
+      await runClips(hit.segs); return true
+    }
+    const sc = side.current
+    const found = sc ? await parseSidecar(sc) : await scanSubtitles(f, p => { setInfo(i => ({ ...i, download: Math.round(p * 100) })); setStatus(`Looking for subtitles… ${Math.round(p * 100)}%`) })
+    const track = pickTrack(found.tracks)
+    const bitmap = found.tracks.length > 0 && !track
+    const tr = track && cuesToTranscript(cleanCues(found.cues[track.id] ?? [], track.codec))
+    const why = !tr ? (bitmap ? 'only image subtitles were found, which cannot be read' : '') : usable(tr.segs, audio.duration)
+    if (!track || !tr || why) {
+      setInfo(i => ({ ...i, subs: null, model: null, device: null, download: null }))
+      if (why) setWarn(`Subtitles were found but look unusable (${why}), so Whisper is transcribing instead.`)
+      return false
+    }
+    scan.current = found
+    const label = `${trackLabel(track)} · ${tr.segs.length.toLocaleString()} cues`
+    setSubs({ tracks: found.tracks, trackId: track.id, label }); setInfo(i => ({ ...i, subs: label, download: null }))
+    // Loudness only: stream the audio through the meter (no speech model).
+    setStage('transcribe')
+    const meter = new LoudnessMeter(), t0 = Date.now()
+    let done = 0
+    for await (const sl of audio.slices()) {
+      meter.add(sl.audio, sl.offset); done += sl.audio.length / 16000
+      const el = (Date.now() - t0) / 1000, left = ((audio.duration - done) * el) / done
+      setStatus(`Using subtitles (${label}). Measuring loudness… ${Math.min(100, Math.round((done / audio.duration) * 100))}% · ${dur(el)} elapsed`)
+      setInfo(i => ({ ...i, pct: Math.min(100, Math.round((done / audio.duration) * 100)), elapsed: el, left, speed: done / el }))
+    }
+    console.info(`[reelio] subtitles: ${tr.segs.length} cues, loudness pass ${((Date.now() - t0) / 1000).toFixed(1)}s for ${Math.round(audio.duration)}s of audio`)
+    segments.current = tr.segs; loud.current = meter.finish(); setWords(tr.words)
+    await putTranscript(key, { segs: tr.segs, loud: loud.current, words: tr.words, subs: { tracks: found.tracks, cues: found.cues, trackId: track.id } })
+    await runClips(tr.segs, force)
+    return true
+  }
+  const switchTrack = async (id: string) => {
+    const f = file, sc = scan.current, t = sc?.tracks.find(x => x.id === id)
+    if (!f || !sc || !t || !loud.current) return
+    const tr = cuesToTranscript(cleanCues(sc.cues[id] ?? [], t.codec))
+    const why = usable(tr.segs, loud.current.rms.length)
+    if (why) { setWarn(`That subtitle track looks unusable (${why}).`); return }
+    setWarn(''); setCached(false)
+    const label = `${trackLabel(t)} · ${tr.segs.length.toLocaleString()} cues`
+    setSubs({ tracks: sc.tracks, trackId: id, label }); setInfo(i => ({ ...i, subs: label }))
+    segments.current = tr.segs; setWords(tr.words)
+    void putTranscript(subsKey(f), { segs: tr.segs, loud: loud.current, words: tr.words, subs: { tracks: sc.tracks, cues: sc.cues, trackId: id } })
+    await runClips(tr.segs)
+  }
+
+  const start = async (f: File, force = false, whisper = false) => {
     void runFacecam(f)
+    setSubs(null); scan.current = null
     setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setWords([]); loud.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
     let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
       setStage('model'); setStatus('Opening file…')
       audio = await openAudio(f)
+      if (!whisper && await fromSubtitles(f, audio, force)) return
       const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-tiny'
       const mname = model.split('/')[1]
       setInfo(i => ({ ...i, model: mname }))
@@ -173,7 +244,7 @@ export default function App() {
     } finally { tr?.close(); audio?.close() }
   }
 
-  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null; setSubs(null); scan.current = null; side.current = null }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
@@ -188,7 +259,7 @@ export default function App() {
     setAll(null)
     if (ok) { setAllDone(true); setTimeout(() => setAllDone(false), 4000) }
   }
-  const onFiles = (f: File) => { if (!busy) start(f) }
+  const onFiles = (f: File, sidecar?: File) => { if (!busy) { side.current = sidecar ?? null; start(f) } }
   const gpuBusy = busy || all !== null || renders > 0
   const allPct = all ? Math.round(((all.i + all.p / 100) / all.n) * 100) : 0
 
@@ -233,6 +304,7 @@ export default function App() {
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       <Chip>{(file.size / 1048576).toFixed(file.size > 1e9 ? 0 : 1)} MB</Chip>
                       {stage === 'done' && <Chip tone="accent"><Sparkles className="size-3" aria-hidden />{clips.length} clip{clips.length === 1 ? '' : 's'}</Chip>}
+                      {subs && stage === 'done' && <SubtitleSource label={subs.label} tracks={subs.tracks} trackId={subs.trackId} onPick={switchTrack} disabled={busy} />}
                       {cached && stage !== 'model' && <Chip tone="good"><Database className="size-3" aria-hidden />Transcript from cache</Chip>}
                       {answeredBy && stage === 'done' && <Chip className="max-w-full"><span className="truncate" title={answeredBy}>via {answeredBy}</span></Chip>}
                     </div>
@@ -243,7 +315,7 @@ export default function App() {
                     <Button size="sm" title="Ask the LLM again, ignoring the cached clip result" icon={<RefreshCw className="size-3.5" />} onClick={() => runClips(segments.current!, true)}>Find clips again</Button>
                   )}
                   {!busy && (
-                    <Button size="sm" title="Ignore the cached transcript and transcribe again" icon={<ScanText className="size-3.5" />} onClick={() => start(file, true)}>Re-transcribe</Button>
+                    <Button size="sm" title={subs ? 'Ignore the subtitles and transcribe the audio with Whisper' : 'Ignore the cached transcript and transcribe again'} icon={<ScanText className="size-3.5" />} onClick={() => start(file, true, true)}>{subs ? 'Transcribe with Whisper instead' : 'Re-transcribe'}</Button>
                   )}
                   <Button size="sm" variant="ghost" icon={<FilePlus2 className="size-3.5" />} onClick={reset}>New video</Button>
                 </div>

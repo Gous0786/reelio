@@ -12,14 +12,19 @@ export interface RunInfo {
   model: string | null; device: string | null; gpu: string | null; workers: number | null
   pct: number | null; elapsed: number | null; left: number | null; speed: number | null
   download: number | null
+  subs: string | null // set when the transcript comes from subtitles (e.g. 'English · SRT · 2,436 cues')
 }
-export const NO_INFO: RunInfo = { model: null, device: null, gpu: null, workers: null, pct: null, elapsed: null, left: null, speed: null, download: null }
+export const NO_INFO: RunInfo = { model: null, device: null, gpu: null, workers: null, pct: null, elapsed: null, left: null, speed: null, download: null, subs: null }
 
 const STEPS: { id: Stage; label: string; title: string; Icon: LucideIcon }[] = [
   { id: 'model', label: 'Speech model', title: 'Warming up the speech model', Icon: HardDriveDownload },
   { id: 'transcribe', label: 'Transcribe', title: 'Listening to every second', Icon: AudioLines },
   { id: 'clips', label: 'Find clips', title: 'Picking the best moments', Icon: Sparkles },
 ]
+const SUBS_STEPS: Record<number, { label: string; title: string }> = {
+  0: { label: 'Subtitles', title: 'Reading the subtitles' },
+  1: { label: 'Loudness', title: 'Measuring the audio' },
+}
 const BARS = Array.from({ length: 72 }, (_, i) => 0.18 + 0.82 * Math.abs(Math.sin(i * 0.9) * Math.sin(i * 0.23 + 1)))
 
 function Tile({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
@@ -35,7 +40,8 @@ export default function ProgressView({ stage, status, info }: { stage: Stage; st
   const cur = Math.max(0, STEPS.findIndex(s => s.id === stage))
   const bar = stage === 'transcribe' ? info.pct : stage === 'model' ? info.download : null
   const dash = '—'
-  const step = STEPS[cur]
+  const subs = info.subs !== null // subtitles replace the speech model + transcription steps
+  const step = subs ? { ...STEPS[cur], ...(SUBS_STEPS[cur] ?? {}) } : STEPS[cur]
   return (
     <section className="slab overflow-hidden p-5 sm:p-7" aria-live="polite" aria-label="Processing progress">
       <div className="flex items-center gap-4">
@@ -52,7 +58,8 @@ export default function ProgressView({ stage, status, info }: { stage: Stage; st
       </div>
 
       <ol className="mt-6 grid grid-cols-3 gap-2">
-        {STEPS.map(({ id, label, Icon }, i) => {
+        {STEPS.map(({ id, label: l0, Icon }, i) => {
+          const label = subs ? (SUBS_STEPS[i]?.label ?? l0) : l0
           const state = i < cur ? 'done' : i === cur ? 'active' : 'todo'
           return (
             <li key={id} aria-current={state === 'active' ? 'step' : undefined}

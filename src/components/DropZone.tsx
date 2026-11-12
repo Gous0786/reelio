@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { Anim } from './Illustrations'
 import BorderBeam from './vengeance/BorderBeam'
 import { Button } from './ui'
+import { isSidecar } from '../lib/subtitles'
 
 const STEPS = [
   { Icon: Lock, title: 'Transcribed on your device', text: 'Whisper runs in the browser. The video never leaves.' },
@@ -48,10 +49,13 @@ function ClipStack({ over }: { over: boolean }) {
   )
 }
 
-export default function DropZone({ onFile }: { onFile: (f: File) => void }) {
+export default function DropZone({ onFile }: { onFile: (f: File, sidecar?: File) => void }) {
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
-  const pick = (fl: FileList | null) => { const f = fl?.[0]; if (f) onFile(f) }
+  const pick = (fl: FileList | null) => { // a video, plus an optional .srt/.vtt picked or dropped with it
+    const all = [...(fl ?? [])], f = all.find(x => !isSidecar(x))
+    if (f) onFile(f, all.find(isSidecar))
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -78,11 +82,11 @@ export default function DropZone({ onFile }: { onFile: (f: File) => void }) {
               <FileVideo className="size-5 shrink-0 text-accent" aria-hidden />
               <span>Drag a video here, or</span>
             </span>
-            <input ref={input} type="file" accept="video/*,audio/*" className="sr-only" aria-label="Choose a video file" tabIndex={-1}
+            <input ref={input} type="file" multiple accept="video/*,audio/*,.srt,.vtt,.ass,.ssa" className="sr-only" aria-label="Choose a video file" tabIndex={-1}
               onChange={e => { pick(e.target.files); e.target.value = '' }} />
             <Button variant="primary" size="lg" icon={<Upload className="size-5" />} onClick={() => input.current?.click()}>Choose a video</Button>
           </div>
-          <p className="text-xs text-muted">MP4, MOV, MKV or WebM · hours-long files are fine</p>
+          <p className="text-xs text-muted">MP4, MOV, MKV or WebM · hours-long files are fine · embedded subtitles or a dropped .srt/.vtt are used instead of transcribing</p>
         </div>
 
         <ClipStack over={over} />
