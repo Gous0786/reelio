@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import * as m from 'motion/react-m'
-import { CircleHelp, Crop, Database, KeyRound, Maximize2, FilePlus2, FileVideo, Play, RefreshCw, ScanText, Sparkles } from 'lucide-react'
+import { CircleHelp, Star, Crop, Database, KeyRound, Maximize2, FilePlus2, FileVideo, Play, RefreshCw, ScanText, Sparkles } from 'lucide-react'
 import type { Clip, Loud, Segment, Word } from './lib/types'
 import { findClips } from './lib/llm'
 import { findRankedClips } from './lib/rank'
@@ -289,6 +289,10 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <ThemeSwitcher value={theme} onChange={setTheme} />
+              <a href="https://github.com/Gous0786/reelio" target="_blank" rel="noopener noreferrer" aria-label="Star Reelio on GitHub" title="Star Reelio on GitHub"
+                className="hidden h-8 shrink-0 items-center justify-center gap-1.5 rounded-full border border-line bg-raised px-3.5 text-[13px] font-semibold text-fg transition hover:border-fg/40 hover:bg-fg/8 sm:inline-flex">
+                <Star className="size-4 text-hot" fill="currentColor" aria-hidden />Star on GitHub
+              </a>
               <Button variant="secondary" size="sm" icon={<CircleHelp className="size-4" />} aria-label="How to use Reelio" onClick={() => setHowTo(true)}>
                 <span className="hidden sm:inline">How to</span>
               </Button>

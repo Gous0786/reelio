@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { FileVideo, Lock, Play, Scissors, Upload, Wand2 } from 'lucide-react'
+import { FileVideo, Lock, Star, Play, Scissors, Upload, Wand2 } from 'lucide-react'
 import clsx from 'clsx'
 import { Anim } from './Illustrations'
 import BorderBeam from './vengeance/BorderBeam'
@@ -86,6 +86,10 @@ export default function DropZone({ onFile }: { onFile: (f: File, sidecar?: File)
               onChange={e => { pick(e.target.files); e.target.value = '' }} />
             <Button variant="primary" size="lg" icon={<Upload className="size-5" />} onClick={() => input.current?.click()}>Choose a video</Button>
           </div>
+          <a href="https://github.com/Gous0786/reelio" target="_blank" rel="noopener noreferrer"
+            className="inline-flex h-9 items-center gap-1.5 self-start rounded-full border border-line bg-raised px-4 text-[13px] font-semibold text-fg transition hover:border-fg/40 hover:bg-fg/8 sm:hidden">
+            <Star className="size-4 text-hot" fill="currentColor" aria-hidden />Star on GitHub
+          </a>
           <p className="text-xs text-muted">MP4, MOV, MKV or WebM · hours-long files are fine · embedded subtitles or a dropped .srt/.vtt are used instead of transcribing</p>
         </div>
 
