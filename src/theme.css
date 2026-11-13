@@ -1,0 +1,91 @@
+/* Fonts and theme tokens, shared by the app (index.css) and the static pages (static.css). */
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Space Grotesk Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url('../node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+/* ---------- Themes ----------
+   Every colour in the UI comes from these variables, so a theme is just a block below.
+   Text pairs used for body copy are >= 4.5:1 (fg/muted on surface, on-accent on accent). */
+:root, [data-theme='citrus'] {
+  color-scheme: dark;
+  --base: #08110e;
+  --surface: #0f1b17;
+  --raised: #16261f;
+  --line: rgb(214 255 226 / 0.13);
+  --fg: #f1fbf3;
+  --muted: #a8bfb2;
+  --accent: #c6f432;      /* lime */
+  --on-accent: #0a1407;
+  --hot: #ff6a3d;         /* coral */
+  --zing: #34e5d3;        /* aqua */
+  --good: #5ef0a0;
+  --warn: #ffc94a;
+  --bad: #ff6b6b;
+  --edge: #5d7d0c;        /* pop-button under-edge */
+  --card-border: rgb(214 255 226 / 0.12);
+  --card-bw: 1px;
+  --card-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.7);
+  --bezel: #030605;
+  --fluid-bg: #08110e;
+  --fluid-1: #0c1915; --fluid-2: #0f211b; --fluid-3: #112a21; --fluid-4: #10352c;
+  --fluid-5: #12493a; --fluid-6: #3f7a12; --fluid-7: #c6f432;
+}
+[data-theme='ember'] {
+  color-scheme: dark;
+  --base: #140906;
+  --surface: #1e0f0a;
+  --raised: #2a1610;
+  --line: rgb(255 226 210 / 0.14);
+  --fg: #fff4ec;
+  --muted: #d4b6a6;
+  --accent: #ff7f1f;      /* tangerine */
+  --on-accent: #1d0b02;
+  --hot: #ff4d8d;         /* hot pink */
+  --zing: #ffd23f;        /* sun yellow */
+  --good: #7ee08a;
+  --warn: #ffd23f;
+  --bad: #ff6464;
+  --edge: #93410a;
+  --card-border: rgb(255 226 210 / 0.13);
+  --card-bw: 1px;
+  --card-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.75);
+  --bezel: #060201;
+  --fluid-bg: #140906;
+  --fluid-1: #1d0c07; --fluid-2: #270f08; --fluid-3: #33130a; --fluid-4: #45180b;
+  --fluid-5: #66200d; --fluid-6: #b5340f; --fluid-7: #ff7f1f;
+}
+[data-theme='pop'] {
+  color-scheme: light;
+  --base: #fff3d6;
+  --surface: #ffffff;
+  --raised: #fff7e6;
+  --line: rgb(17 17 17 / 0.16);
+  --fg: #111111;
+  --muted: #4b4b4b;
+  --accent: #2346ff;      /* cobalt */
+  --on-accent: #ffffff;
+  --hot: #c42c12;         /* tomato (5.6:1 on white) */
+  --zing: #ffc400;        /* yellow, decoration only */
+  --good: #0a7230;
+  --warn: #9a5b00;
+  --bad: #c8231b;
+  --edge: #111111;
+  --card-border: #111111;
+  --card-bw: 2px;
+  --card-shadow: 6px 6px 0 0 #111111;
+  --bezel: #111111;
+  --fluid-bg: #fff3d6;
+  --fluid-1: #ffebc2; --fluid-2: #ffe1a8; --fluid-3: #ffd27e; --fluid-4: #ffc24f;
+  --fluid-5: #8fb0ff; --fluid-6: #5a80ff; --fluid-7: #2346ff;
+}

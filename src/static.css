@@ -1,0 +1,58 @@
+/* Styles for the static HTML (home-page sections below the app, and the landing pages). Plain CSS on the shared theme
+   tokens, everything under .sx so it cannot collide with the app's Tailwind CSS on the home page. */
+.sx {
+  --sx-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --sx-display: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  color: var(--fg);
+  font-family: var(--sx-sans);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.sx, .sx *, .sx *::before, .sx *::after { box-sizing: border-box; }
+:where(.sx) :is(h1, h2, h3, p, ul, ol) { margin: 0; padding: 0; }
+:where(.sx) :is(ul, ol) { list-style: none; }
+.sx-wrap { width: 100%; max-width: 72rem; margin: 0 auto; padding: 0 0.75rem; }
+@media (min-width: 640px) { .sx-wrap { padding: 0 1.5rem; } }
+
+.sx h1, .sx h2 { font-family: var(--sx-display); font-weight: 700; letter-spacing: -0.02em; text-transform: uppercase; line-height: 1; }
+.sx h2 { font-size: clamp(1.7rem, 5.2vw, 2.5rem); }
+.sx h3 { font-family: var(--sx-display); font-size: 1.05rem; font-weight: 700; line-height: 1.3; }
+.sx p { color: var(--muted); }
+.sx a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.sx a:hover { text-decoration-color: var(--hot); }
+.sx :focus-visible { outline: 3px solid var(--zing); outline-offset: 2px; }
+[data-theme='pop'] .sx :focus-visible { outline-color: var(--accent); }
+
+.sx-eyebrow { font-family: var(--sx-display); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent) !important; }
+[data-theme='pop'] .sx-eyebrow { color: var(--hot) !important; }
+
+.sx-card { background: var(--surface); border: var(--card-bw) solid var(--card-border); box-shadow: var(--card-shadow); border-radius: 1.75rem; padding: 1.25rem; }
+@media (min-width: 640px) { .sx-card { padding: 1.75rem; } }
+.sx-inset { background: var(--raised); border: 1px solid var(--line); border-radius: 1.1rem; padding: 1rem; }
+
+.sx-section { margin-top: 1.25rem; }
+.sx-section > .sx-card > h2 { margin-top: 0.5rem; }
+.sx-lead { margin-top: 0.9rem; max-width: 46rem; font-size: 1rem; }
+.sx-lead + .sx-lead { margin-top: 0.6rem; }
+
+.sx-list { display: grid; gap: 0.75rem; margin-top: 1.25rem; }
+@media (min-width: 640px) { .sx-list { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 640px) { .sx-steps { grid-template-columns: repeat(3, 1fr); } }
+.sx-list li p, .sx-q p { margin-top: 0.35rem; font-size: 14px; line-height: 1.6; }
+.sx-steps li { display: flex; gap: 0.9rem; }
+.sx-steps li > div { min-width: 0; }
+.sx-num { font-family: var(--sx-display); font-size: 2.4rem; line-height: 1; font-weight: 700; color: var(--accent); -webkit-text-stroke: 1px var(--edge); }
+[data-theme='pop'] .sx-num { color: var(--accent); }
+
+.sx-faq { display: grid; gap: 0.75rem; margin-top: 1.25rem; }
+@media (min-width: 900px) { .sx-faq { grid-template-columns: repeat(2, 1fr); align-items: start; } }
+
+.sx-btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; height: 3rem; padding: 0 1.6rem; border-radius: 999px; font: 700 1rem var(--sx-display); cursor: pointer; text-decoration: none !important; white-space: nowrap; }
+.sx-btn-pop { background: var(--accent); color: var(--on-accent) !important; border: 2px solid var(--edge); box-shadow: 0 5px 0 0 var(--edge); transition: transform 140ms, box-shadow 140ms, filter 140ms; }
+.sx-btn-pop:hover { transform: translateY(2px); box-shadow: 0 3px 0 0 var(--edge); filter: brightness(1.05); }
+.sx-btn-pop:active { transform: translateY(5px); box-shadow: none; }
+.sx-btn-quiet { background: var(--raised); color: var(--fg) !important; border: 1px solid var(--line); height: 2.5rem; padding: 0 1.2rem; font-size: 0.9rem; }
+.sx-btn-quiet:hover { border-color: color-mix(in oklab, var(--fg) 40%, transparent); }
+@media (prefers-reduced-motion: reduce) { .sx-btn-pop { transition: none; } }
+
+.sx-small { font-size: 12.5px !important; line-height: 1.55; }

@@ -1,0 +1,58 @@
+/* Landing pages: shared theme tokens + the .sx building blocks + the page chrome below. No Tailwind, no JS. */
+@import './theme.css';
+@import './static.css';
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--base);
+  color: var(--fg);
+  font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(60rem 28rem at 85% -6rem, color-mix(in oklab, var(--fluid-6) 38%, transparent), transparent 70%),
+    radial-gradient(44rem 24rem at -8% 30rem, color-mix(in oklab, var(--fluid-5) 30%, transparent), transparent 70%);
+  background-repeat: no-repeat;
+}
+::selection { background: var(--accent); color: var(--on-accent); }
+
+.lp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 0.75rem; }
+.lp-head-in { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; background: var(--surface); border: var(--card-bw) solid var(--card-border); box-shadow: var(--card-shadow); border-radius: 999px; padding: 0.5rem 0.5rem 0.5rem 0.7rem; }
+.lp-logo { display: flex; align-items: center; gap: 0.65rem; text-decoration: none !important; color: var(--fg) !important; }
+.lp-mark { display: grid; place-items: center; width: 1.75rem; height: 2.5rem; border-radius: 0.5rem; border: 2px solid var(--edge); background: var(--accent); color: var(--on-accent); }
+.lp-mark svg { width: 0.85rem; height: 0.85rem; transform: translateX(1px); }
+.lp-word { font: 700 1.25rem/1 var(--sx-display); letter-spacing: -0.02em; }
+
+.lp-hero { display: grid; gap: 2rem; margin-top: 1.25rem; align-items: center; }
+@media (min-width: 960px) { .lp-hero { grid-template-columns: 1.15fr 0.85fr; } }
+.lp-hero h1 { margin-top: 0.75rem; font-size: clamp(2.3rem, 9.5vw, 4.25rem); line-height: 0.96; }
+.lp-tag { display: inline-block; margin: 0.3rem 0; padding: 0 0.7rem 0.15rem; border-radius: 1rem; border: 2px solid var(--edge); background: var(--accent); color: var(--on-accent); box-shadow: 0 5px 0 0 var(--edge); transform: rotate(-2deg); }
+.lp-hero .sx-lead { font-size: 1.05rem; }
+.lp-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; margin-top: 1.5rem; }
+.lp-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.4rem; }
+.lp-chips li { border: 1px solid var(--line); background: var(--raised); border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+
+/* Decorative ranked-clip stack (CSS only, no numbers: it is an illustration, not data) */
+.lp-mock { display: grid; gap: 0.75rem; max-width: 26rem; width: 100%; margin: 0 auto; }
+@media (max-width: 639px) { .lp-mock { display: none; } }
+.lp-row { display: flex; gap: 1rem; align-items: center; padding: 0.8rem 1rem; background: var(--surface); border: var(--card-bw) solid var(--card-border); box-shadow: var(--card-shadow); border-radius: 1.5rem; }
+.lp-row:first-child { border-color: var(--accent); }
+.lp-phone { flex: none; width: 4.2rem; aspect-ratio: 9 / 16; border-radius: 1rem; border: 5px solid var(--bezel); background: linear-gradient(160deg, var(--fluid-5), var(--fluid-2) 60%, var(--fluid-6)); position: relative; }
+.lp-phone::after { content: ''; position: absolute; left: 0.45rem; right: 0.45rem; bottom: 0.55rem; height: 0.4rem; border-radius: 0.3rem; background: color-mix(in oklab, var(--fg) 85%, transparent); }
+.lp-rank { font: 700 1.9rem/1 var(--sx-display); color: var(--accent); -webkit-text-stroke: 1px var(--edge); }
+.lp-bars { display: grid; gap: 0.4rem; margin-top: 0.45rem; width: 100%; }
+.lp-bars i { display: block; height: 0.55rem; border-radius: 0.4rem; background: var(--raised); border: 1px solid var(--line); overflow: hidden; position: relative; }
+.lp-bars i::after { content: ''; position: absolute; inset: 0; width: var(--w); background: linear-gradient(90deg, var(--zing), var(--accent)); }
+.lp-row > div:last-child { flex: 1; min-width: 0; }
+
+.lp-cta-end { text-align: center; }
+.lp-cta-end .lp-cta { justify-content: center; }
+.lp-cta-end h2, .lp-cta-end .sx-lead { margin-left: auto; margin-right: auto; }
+
+.lp-foot { margin-top: 1.5rem; padding-bottom: 2.5rem; }
+.lp-foot .sx-card { display: grid; gap: 0.6rem; text-align: center; border-radius: 1.5rem; padding: 1.1rem 1.25rem; }
+.lp-foot p { font-size: 12.5px; line-height: 1.55; }
+.lp-foot nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.4rem 1.2rem; font-size: 13px; font-weight: 600; }

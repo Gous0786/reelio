@@ -3,13 +3,148 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Reelio – long video to ranked shorts</title>
+    <title>Reelio – Free Gameplay &amp; Stream Clip Maker, in Your Browser</title>
+    <meta name="description" content="Turn a long gameplay video or stream recording into ranked 9:16 shorts with captions and a facecam layout. Free, runs in your browser, video never uploaded." />
+    <link rel="canonical" href="https://reelio.page/" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="theme-color" content="#08110e" />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Reelio" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="https://reelio.page/" />
+    <meta property="og:title" content="Reelio – Free Gameplay &amp; Stream Clip Maker, in Your Browser" />
+    <meta property="og:description" content="Turn a long gameplay video or stream recording into ranked 9:16 shorts with captions and a facecam layout. Free, runs in your browser, video never uploaded." />
+    <meta property="og:image" content="https://reelio.page/og-home.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Reelio: long video in, shorts out, with a ranked list of vertical clips" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Reelio – Free Gameplay &amp; Stream Clip Maker, in Your Browser" />
+    <meta name="twitter:description" content="Turn a long gameplay video or stream recording into ranked 9:16 shorts with captions and a facecam layout. Free, runs in your browser, video never uploaded." />
+    <meta name="twitter:image" content="https://reelio.page/og-home.png" />
+    <meta name="twitter:image:alt" content="Reelio: long video in, shorts out, with a ranked list of vertical clips" />
+
     <script>
       try { var t = localStorage.getItem('reelio_theme'); document.documentElement.dataset.theme = /^(citrus|ember|pop)$/.test(t) ? t : 'citrus' } catch (e) {}
     </script>
+    <link rel="stylesheet" href="/src/static.css" />
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "@id": "https://reelio.page/#app",
+          "name": "Reelio",
+          "url": "https://reelio.page/",
+          "description": "A free, browser-based clip maker. It turns a long gameplay video or stream recording into ranked vertical 9:16 clips with captions, an optional facecam layout and trim, all processed on your own device.",
+          "applicationCategory": "MultimediaApplication",
+          "operatingSystem": "Any operating system with a recent desktop Chrome or Edge",
+          "browserRequirements": "Requires a browser with WebCodecs support; WebGPU makes transcription faster.",
+          "isAccessibleForFree": true,
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "image": "https://reelio.page/og-home.png",
+          "featureList": [
+            "Finds and ranks the best moments in a long video",
+            "Exports vertical 9:16 MP4 clips",
+            "Burned-in captions in three styles",
+            "Stacked facecam layout, centre crop or fit with blurred background",
+            "Uses embedded subtitles or a dropped .srt/.vtt file instead of transcribing",
+            "Runs in the browser; the video is never uploaded"
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://reelio.page/#website",
+          "name": "Reelio",
+          "url": "https://reelio.page/",
+          "inLanguage": "en"
+        },
+        {
+          "@type": "FAQPage",
+          "mainEntity": [
+            { "@type": "Question", "name": "What is Reelio?", "acceptedAnswer": { "@type": "Answer", "text": "Reelio is a free clip maker that turns a long gameplay video or stream recording into short, ranked, vertical (9:16) clips. It finds candidate moments, scores them, and exports the ones you choose as MP4 files for TikTok, YouTube Shorts or Instagram Reels." } },
+            { "@type": "Question", "name": "Is Reelio really free?", "acceptedAnswer": { "@type": "Answer", "text": "Reelio itself is free, with no account and no watermark. Picking the moments uses a language model through your own API key. Google Gemini and OpenRouter both offer free keys; their daily limits and terms are theirs." } },
+            { "@type": "Question", "name": "Is my video uploaded anywhere?", "acceptedAnswer": { "@type": "Answer", "text": "No. Decoding, transcription and rendering happen in your browser tab. The only things sent out are the transcript text and a few numbers measured from the audio, such as loudness, which go to the model provider whose key you entered. The speech model is downloaded once from Hugging Face and cached by your browser." } },
+            { "@type": "Question", "name": "Which videos and browsers work?", "acceptedAnswer": { "@type": "Answer", "text": "MP4, MOV, MKV and WebM recordings, including multi-hour ones; the file is streamed rather than loaded whole. Reelio is built for a recent desktop Chrome or Edge. Transcription is much faster with WebGPU and falls back to a slower path without it." } },
+            { "@type": "Question", "name": "How does Reelio decide which moments are best?", "acceptedAnswer": { "@type": "Answer", "text": "A language model proposes candidate moments from the transcript, Reelio adds loudness peaks and tightens the boundaries, then every candidate is scored on eight things: event arc, hook, standalone context, reaction, novelty, pacing, audio clarity and discussion. The ranking is a guide for what to look at first, not a prediction of views." } },
+            { "@type": "Question", "name": "Does it only work for one game?", "acceptedAnswer": { "@type": "Answer", "text": "No. Reelio works from speech and audio, so it suits any game or stream with commentary. Recordings with little or no talking give it less to go on." } },
+            { "@type": "Question", "name": "Can Reelio post to TikTok, Shorts or Reels for me?", "acceptedAnswer": { "@type": "Answer", "text": "No. You download the MP4 clips and upload them yourself. Reelio also does not download streams from links: you need the recording file." } }
+          ]
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Shown until the app mounts (and to crawlers and no-JS readers); React replaces it. Same copy as the app's own hero. -->
+    <div id="root" style="min-height: 100vh">
+      <main class="sx" style="padding: 2rem 1rem">
+        <div class="sx-wrap">
+          <p class="sx-eyebrow">Long video → vertical shorts</p>
+          <h1 style="margin-top: 0.75rem; font-size: clamp(2.2rem, 8vw, 3.75rem)">Long video in. Shorts out.</h1>
+          <p class="sx-lead">Drop a stream recording or any long video. Reelio finds the strongest moments, ranks them and renders vertical clips, right here in your browser.</p>
+          <noscript><p class="sx-lead">Reelio runs in your browser and needs JavaScript turned on.</p></noscript>
+        </div>
+      </main>
+    </div>
+
+    <div class="sx" style="padding: 0 0 3rem">
+      <div class="sx-wrap">
+        <section class="sx-section" id="about" aria-labelledby="about-h">
+          <div class="sx-card">
+            <p class="sx-eyebrow">What it does</p>
+            <h2 id="about-h">A free clip maker for gameplay and stream recordings</h2>
+            <p class="sx-lead">Reelio takes a long recording (a stream, a gaming session, a podcast-style talk) and works out which parts are worth posting. It lists the strongest moments in order, lets you trim each one, and renders vertical 9:16 MP4 clips with captions, ready for TikTok, YouTube Shorts or Instagram Reels.</p>
+            <p class="sx-lead">Everything that touches your video happens in your browser tab. There is no upload, no account and no watermark.</p>
+            <ul class="sx-list">
+              <li class="sx-inset"><h3>Ranked, not just cut</h3><p>Moments are scored on event arc, hook, standalone context, reaction, novelty, pacing, audio clarity and discussion, so the best ones come first.</p></li>
+              <li class="sx-inset"><h3>Captions built in</h3><p>Burned-in captions in three styles, timed to the words.</p></li>
+              <li class="sx-inset"><h3>Facecam layout</h3><p>Reelio looks for your facecam and can stack it above the gameplay. You can move or switch it off. Or choose centre crop, or fit with a blurred background.</p></li>
+              <li class="sx-inset"><h3>Long recordings are fine</h3><p>The file is streamed, not loaded whole, so multi-hour streams work. Existing subtitles skip transcription entirely.</p></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="sx-section" id="how" aria-labelledby="how-h">
+          <div class="sx-card">
+            <p class="sx-eyebrow">How it works</p>
+            <h2 id="how-h">From long video to shorts in three steps</h2>
+            <ol class="sx-list sx-steps">
+              <li class="sx-inset"><span class="sx-num" aria-hidden="true">01</span><div><h3>Add a free key once</h3><p>Paste a free Google Gemini or OpenRouter API key in Settings. It stays in your browser.</p></div></li>
+              <li class="sx-inset"><span class="sx-num" aria-hidden="true">02</span><div><h3>Drop your recording</h3><p>Reelio transcribes the audio on your device (or reads the subtitles that came with the file) and picks and ranks the moments.</p></div></li>
+              <li class="sx-inset"><span class="sx-num" aria-hidden="true">03</span><div><h3>Trim and export</h3><p>Adjust the start and end, choose captions and framing, and download 9:16 MP4 clips one by one or all at once.</p></div></li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="sx-section" id="faq" aria-labelledby="faq-h">
+          <div class="sx-card">
+            <p class="sx-eyebrow">Questions</p>
+            <h2 id="faq-h">Reelio FAQ</h2>
+            <div class="sx-faq">
+              <div class="sx-q sx-inset"><h3>What is Reelio?</h3><p>Reelio is a free clip maker that turns a long gameplay video or stream recording into short, ranked, vertical (9:16) clips. It finds candidate moments, scores them, and exports the ones you choose as MP4 files for TikTok, YouTube Shorts or Instagram Reels.</p></div>
+              <div class="sx-q sx-inset"><h3>Is Reelio really free?</h3><p>Reelio itself is free, with no account and no watermark. Picking the moments uses a language model through your own API key. Google Gemini and OpenRouter both offer free keys; their daily limits and terms are theirs.</p></div>
+              <div class="sx-q sx-inset"><h3>Is my video uploaded anywhere?</h3><p>No. Decoding, transcription and rendering happen in your browser tab. The only things sent out are the transcript text and a few numbers measured from the audio, such as loudness, which go to the model provider whose key you entered. The speech model is downloaded once from Hugging Face and cached by your browser.</p></div>
+              <div class="sx-q sx-inset"><h3>Which videos and browsers work?</h3><p>MP4, MOV, MKV and WebM recordings, including multi-hour ones; the file is streamed rather than loaded whole. Reelio is built for a recent desktop Chrome or Edge. Transcription is much faster with WebGPU and falls back to a slower path without it.</p></div>
+              <div class="sx-q sx-inset"><h3>How does Reelio decide which moments are best?</h3><p>A language model proposes candidate moments from the transcript, Reelio adds loudness peaks and tightens the boundaries, then every candidate is scored on eight things: event arc, hook, standalone context, reaction, novelty, pacing, audio clarity and discussion. The ranking is a guide for what to look at first, not a prediction of views.</p></div>
+              <div class="sx-q sx-inset"><h3>Does it only work for one game?</h3><p>No. Reelio works from speech and audio, so it suits any game or stream with commentary. Recordings with little or no talking give it less to go on.</p></div>
+              <div class="sx-q sx-inset"><h3>Can Reelio post to TikTok, Shorts or Reels for me?</h3><p>No. You download the MP4 clips and upload them yourself. Reelio also does not download streams from links: you need the recording file.</p></div>
+            </div>
+            <p class="sx-lead">Clipping a specific game? See the <a href="/gta-6-clip-maker">GTA 6 clip maker page</a> for how Reelio handles GTA 6 gameplay and stream recordings.</p>
+          </div>
+        </section>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
