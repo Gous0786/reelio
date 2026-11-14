@@ -45,13 +45,15 @@ export type Transcriber = Awaited<ReturnType<typeof createTranscriber>>
 // ---- Worker count -------------------------------------------------------------------------------------------
 // Whisper decoding on WebGPU is bound by per-token latency (a GPU round trip and JS work per step), not by GPU
 // compute, so several workers overlap that latency until something shared saturates. Measured on an RTX 3050 laptop
-// (Chrome, whisper-tiny): 1/2/3/4/6 workers = 27/57/62/60/58x realtime on game audio and 13/26/26/27/24x on dense
-// speech, with ~0.5 GB of GPU memory and 1.5-2 GB of browser RAM per worker, so more is not better.
+// in Chrome (x realtime on game audio / dense speech):
+//   whisper-tiny 1/2/3/4/6 workers = 27/57/62/60/58x / 13/26/26/27/24x, ~0.5 GB GPU + 1.5-2 GB RAM per worker
+//   whisper-base 1/2/3/4 workers   = 22/39/38/35x / 11/20/20/20x,       ~0.8 GB GPU + 1.5-3 GB RAM per worker
+// so past 2 workers more is not better.
 // Auto mode: start from a guess (or the count remembered for this GPU + model), add one worker at a time while the
 // aggregate decoding rate improves by >= 15%, and back off on a drop or an error. The result is remembered.
 export const MAX_WORKERS = 6 // manual setting
 const AUTO_MAX = 4
-const GAIN = 1.15 // a worker costs ~0.5 GB GPU + 1.5-2 GB RAM, and run-to-run noise on the step rate is ~10%
+const GAIN = 1.15 // a worker costs 0.5-0.8 GB GPU + 1.5-3 GB RAM, and run-to-run noise on the step rate is ~10%
 const STEP_EQ = 15 // one slice's fixed cost (mel features + encoder) in decoder-step equivalents
 const TUNE_KEY = 'reelio_workers_v1'
 interface Tuned { n: number; worse?: number } // best count; the count that measured worse (not probed again)
@@ -64,7 +66,9 @@ function workerCap(device: Device, fallback: boolean, model: string) {
   if (device !== 'webgpu' || fallback) return 1 // WASM already uses all cores; a software GPU gains nothing
   const mem = (navigator as { deviceMemory?: number }).deviceMemory ?? 4 // Chrome reports at most 8; others nothing
   const cores = navigator.hardwareConcurrency ?? 4
-  const byMem = (mem <= 2 ? 1 : mem <= 4 ? 2 : mem < 8 ? 3 : AUTO_MAX) - (/base/.test(model) && mem < 8 ? 1 : 0)
+  const byMem = /base/.test(model)
+    ? (mem <= 4 ? 1 : mem < 8 ? 2 : 3) // base gained nothing past 2 workers and needs more memory per worker
+    : (mem <= 2 ? 1 : mem <= 4 ? 2 : mem < 8 ? 3 : AUTO_MAX)
   return Math.max(1, Math.min(AUTO_MAX, byMem, cores >= 4 ? cores - 2 : 1))
 }
 /** First guess before anything is measured. The browser exposes too little to tell a fast GPU from a slow one

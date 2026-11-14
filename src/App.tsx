@@ -268,7 +268,8 @@ export default function App() {
       setStage('model'); setStatus('Opening file…')
       audio = await openAudio(f)
       if (!whisper && await fromSubtitles(f, audio, force)) return
-      const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-tiny'
+      // base is the default: with one 30 s window per slice it is ~20% slower than tiny and far more accurate
+      const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-base'
       const mname = model.split('/')[1]
       setInfo(i => ({ ...i, model: mname }))
       const key = cacheKey(f, model)
