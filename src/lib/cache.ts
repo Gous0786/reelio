@@ -1,5 +1,6 @@
 import type { Loud, Segment, Word } from './types'
 import type { Cue, SubTrack } from './subtitles'
+import type { Piece } from './transcribe'
 
 // IndexedDB caches. All calls fail soft (the cache is optional; also absent outside a browser).
 //  transcripts: finished transcripts keyed by file identity + whisper model
@@ -25,7 +26,9 @@ const tx = async <T,>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectS
 export const cacheKey = (f: File, model: string) => `v3|${f.name}|${f.size}|${f.lastModified}|${model}`
 // `subs` is set when the transcript came from subtitles (key records the source): raw cues of every text track are
 // kept so switching track needs no new scan.
-export interface TranscriptEntry { segs: Segment[]; loud: Loud; words: Word[]; subs?: { tracks: SubTrack[]; cues: Record<string, Cue[]>; trackId: string } }
+// Whisper entries: `pieces` = token ids per slice, so words can be timed per clip on demand; `covered` = ranges whose
+// words are timed so far. Entries without `pieces` (subtitles, or Whisper entries from before) hold every word.
+export interface TranscriptEntry { segs: Segment[]; loud: Loud; words: Word[]; covered?: [number, number][]; pieces?: Piece[]; subs?: { tracks: SubTrack[]; cues: Record<string, Cue[]>; trackId: string } }
 export const getTranscript = (key: string) => tx<TranscriptEntry>(TRANSCRIPTS, 'readonly', s => s.get(key)).catch(() => undefined)
 export const putTranscript = (key: string, v: TranscriptEntry) => tx(TRANSCRIPTS, 'readwrite', s => s.put(v, key)).catch(() => undefined)
 export const delTranscript = (key: string) => tx(TRANSCRIPTS, 'readwrite', s => s.delete(key)).catch(() => undefined)

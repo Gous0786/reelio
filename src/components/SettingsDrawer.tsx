@@ -11,13 +11,13 @@ import { Button, IconButton } from './ui'
 export interface SettingsValues {
   geminiKey: string; apiKey: string
   modelPref: 'auto' | WhisperModel
-  workerPref: 'auto' | '1' | '2' | '3'
+  workerPref: 'auto' | '1' | '2' | '3' | '4' | '6'
   fit: Fit
 }
 export interface SettingsProps extends SettingsValues {
   setGeminiKey: (v: string) => void; setApiKey: (v: string) => void
   setModelPref: (v: 'auto' | WhisperModel) => void
-  setWorkerPref: (v: 'auto' | '1' | '2' | '3') => void
+  setWorkerPref: (v: 'auto' | '1' | '2' | '3' | '4' | '6') => void
   setFit: (v: Fit) => void
   theme: ThemeId; setTheme: (t: ThemeId) => void
   open?: boolean; onOpenChange?: (o: boolean) => void // controlled, so other screens can open Settings
@@ -112,9 +112,9 @@ export default function SettingsDrawer(p: SettingsProps) {
                   { value: 'onnx-community/whisper-base', label: 'Base', hint: 'whisper-base (better, slower)' },
                 ]} />
               </Field>
-              <Field label="Parallel workers" help="Auto uses up to 3 on a capable GPU, 1 on CPU or low-memory devices.">
+              <Field label="Parallel workers" help="Auto measures the first minutes of a video, adds workers while that is faster and remembers the best count for this GPU. Each worker uses about 0.5 GB of GPU memory and 1.5 GB of RAM.">
                 <Segmented label="Parallel workers" value={p.workerPref} onChange={p.setWorkerPref} options={[
-                  { value: 'auto', label: 'Auto' }, { value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' },
+                  { value: 'auto', label: 'Auto' }, { value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' }, { value: '4', label: '4' }, { value: '6', label: '6' },
                 ]} />
               </Field>
             </Section>

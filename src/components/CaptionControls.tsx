@@ -22,9 +22,10 @@ export function useCaptionSettings() {
   return [s, setS] as const
 }
 
-export default function CaptionControls({ value, onChange, available }: {
+export default function CaptionControls({ value, onChange, available, busy = '' }: {
   value: CaptionSettings; onChange: (v: CaptionSettings) => void
   available: boolean // false when the transcript has no word timings (nothing to draw)
+  busy?: string // shown while the words of the clips are being timed
 }) {
   const on = value.on && available
   return (
@@ -42,6 +43,7 @@ export default function CaptionControls({ value, onChange, available }: {
         onChange={style => onChange({ ...value, style })}
         options={CAPTION_STYLES.map(c => ({ value: c.value, label: c.label, hint: c.hint }))} />
       {!available && <span className="text-xs text-muted">Re-transcribe to get word timings</span>}
+      {available && busy && <span className="text-xs text-muted" role="status">{busy}</span>}
     </div>
   )
 }
