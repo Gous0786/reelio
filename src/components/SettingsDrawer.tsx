@@ -11,13 +11,13 @@ import { Button, IconButton } from './ui'
 export interface SettingsValues {
   geminiKey: string; apiKey: string
   modelPref: 'auto' | WhisperModel
-  workerPref: 'auto' | '1' | '2' | '3'
+  workerPref: 'auto' | '1' | '2' | '3' | '4' | '6'
   fit: Fit
 }
 export interface SettingsProps extends SettingsValues {
   setGeminiKey: (v: string) => void; setApiKey: (v: string) => void
   setModelPref: (v: 'auto' | WhisperModel) => void
-  setWorkerPref: (v: 'auto' | '1' | '2' | '3') => void
+  setWorkerPref: (v: 'auto' | '1' | '2' | '3' | '4' | '6') => void
   setFit: (v: Fit) => void
   theme: ThemeId; setTheme: (t: ThemeId) => void
   open?: boolean; onOpenChange?: (o: boolean) => void // controlled, so other screens can open Settings
@@ -105,16 +105,16 @@ export default function SettingsDrawer(p: SettingsProps) {
             </Section>
 
             <Section icon={<Cpu className="size-4" />} title="Transcription">
-              <Field label="Speech model" help="Tiny is faster; base is more accurate but slower. Applies to the next video.">
+              <Field label="Speech model" help="Base is more accurate; tiny is a little faster and a smaller download. Applies to the next video.">
                 <Segmented label="Speech model" value={p.modelPref} onChange={p.setModelPref} options={[
-                  { value: 'auto', label: 'Auto', hint: 'auto (whisper-tiny)' },
-                  { value: 'onnx-community/whisper-tiny', label: 'Tiny', hint: 'whisper-tiny (faster)' },
-                  { value: 'onnx-community/whisper-base', label: 'Base', hint: 'whisper-base (better, slower)' },
+                  { value: 'auto', label: 'Auto', hint: 'auto (whisper-base)' },
+                  { value: 'onnx-community/whisper-tiny', label: 'Tiny', hint: 'whisper-tiny (faster, less accurate)' },
+                  { value: 'onnx-community/whisper-base', label: 'Base', hint: 'whisper-base (more accurate)' },
                 ]} />
               </Field>
-              <Field label="Parallel workers" help="Auto uses up to 3 on a capable GPU, 1 on CPU or low-memory devices.">
+              <Field label="Parallel workers" help="Auto measures the first minutes of a video, adds workers while that is faster and remembers the best count for this GPU. Each worker holds its own copy of the model: about 0.5-0.8 GB of GPU memory and 1.5-3 GB of RAM.">
                 <Segmented label="Parallel workers" value={p.workerPref} onChange={p.setWorkerPref} options={[
-                  { value: 'auto', label: 'Auto' }, { value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' },
+                  { value: 'auto', label: 'Auto' }, { value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' }, { value: '4', label: '4' }, { value: '6', label: '6' },
                 ]} />
               </Field>
             </Section>

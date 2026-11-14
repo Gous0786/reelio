@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import * as m from 'motion/react-m'
 import { CircleHelp, Star, Crop, Database, KeyRound, Maximize2, FilePlus2, FileVideo, Play, RefreshCw, ScanText, Sparkles } from 'lucide-react'
@@ -8,7 +8,7 @@ import { findRankedClips } from './lib/rank'
 import { LoudnessMeter } from './lib/signals'
 import { checkSupport, exportClip, openAudio, type Fit } from './lib/media'
 import { cacheKey, delTranscript, getTranscript, putTranscript } from './lib/cache'
-import { createPool, type WhisperModel } from './lib/transcribe'
+import { createWordTimer, keepWordsInSegments, transcribe, type Piece, type WhisperModel, type WordTimer } from './lib/transcribe'
 import { cleanCues, cuesToTranscript, parseSidecar, pickTrack, scanSubtitles, trackLabel, usable, type SubScan, type SubTrack } from './lib/subtitles'
 import { detectFacecam, type FacecamSetting } from './lib/facecam'
 import type { CaptionConfig } from './lib/captions'
@@ -30,6 +30,32 @@ import { HowToDialog, HowToSection } from './components/HowTo'
 import SubtitleSource from './components/SubtitleSource'
 import { Alert, Button, Chip } from './components/ui'
 
+type WorkerPref = 'auto' | '1' | '2' | '3' | '4' | '6'
+const WORKER_PREFS: WorkerPref[] = ['auto', '1', '2', '3', '4', '6']
+
+/** Parts of [a, b] not inside any of the sorted, non-overlapping ranges. */
+function uncovered(ranges: [number, number][], a: number, b: number): [number, number][] {
+  const out: [number, number][] = []
+  let x = a
+  for (const [s, e] of ranges) {
+    if (e <= x) continue
+    if (s >= b) break
+    if (s > x) out.push([x, s])
+    x = Math.max(x, e)
+    if (x >= b) break
+  }
+  if (x < b) out.push([x, b])
+  return out.filter(([s, e]) => e - s > 0.05)
+}
+function mergeRanges(rs: [number, number][]): [number, number][] {
+  const out: [number, number][] = []
+  for (const r of [...rs].sort((x, y) => x[0] - y[0])) {
+    const l = out[out.length - 1]
+    if (l && r[0] <= l[1]) l[1] = Math.max(l[1], r[1]); else out.push([r[0], r[1]])
+  }
+  return out
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState('')
@@ -42,7 +68,10 @@ export default function App() {
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') ?? '')
   const [answeredBy, setAnsweredBy] = useState('')
   const [modelPref, setModelPref] = useState<'auto' | WhisperModel>('auto')
-  const [workerPref, setWorkerPref] = useState<'auto' | '1' | '2' | '3'>('auto')
+  const [workerPref, setWorkerPref] = useState<WorkerPref>(() => {
+    const v = localStorage.getItem('reelio_workers')
+    return v && WORKER_PREFS.includes(v as WorkerPref) ? (v as WorkerPref) : 'auto'
+  })
   const [warn, setWarn] = useState('')
   const [fit, setFit] = useState<Fit>(() => (localStorage.getItem('reelio_fit') === 'blur' ? 'blur' : 'cover'))
   const [cached, setCached] = useState(false)
@@ -56,7 +85,17 @@ export default function App() {
   const [theme, setTheme] = useTheme()
   const loud = useRef<Loud | null>(null) // per-second loudness (from transcription) for the reranker
   const segments = useRef<Segment[] | null>(null) // cached transcript for LLM retry
-  const [words, setWords] = useState<Word[]>([]) // word timings for the captions
+  // Word timings for the captions. Whisper transcribes without them (about 2x faster); the words of each clip are
+  // timed on demand by a separate worker. `covered` = time ranges already timed; subtitles and older cached
+  // transcripts carry every word (covered = everything).
+  const [words, setWords] = useState<Word[]>([])
+  const wordsRef = useRef<Word[]>([])
+  const covered = useRef<[number, number][]>([])
+  const timer = useRef<{ wt: WordTimer; file: File; key: string; pieces: Piece[]; segs: Segment[] } | null>(null) // set while words can be timed
+  const [canTime, setCanTime] = useState(false) // captions possible: words present or a timer is set
+  const [timing, setTiming] = useState(0) // ranges being timed
+  const [timerDl, setTimerDl] = useState<number | null>(null) // caption model download %
+  const wordChain = useRef<Promise<unknown>>(Promise.resolve())
   // set when the transcript comes from subtitles instead of Whisper
   const [subs, setSubs] = useState<{ tracks: SubTrack[]; trackId: string; label: string } | null>(null)
   const scan = useRef<SubScan | null>(null) // raw cues of every text track (switching track needs no new scan)
@@ -66,13 +105,60 @@ export default function App() {
   const fcAbort = useRef<AbortController | null>(null)
   const fcRect = fc?.enabled ? fc.rect : null // set = the stacked facecam layout is on
   const [capSet, setCapSet] = useCaptionSettings()
-  const captions: CaptionConfig | null = capSet.on && words.length ? { words, style: capSet.style } : null
+  const captions: CaptionConfig | null = capSet.on && canTime ? { words, style: capSet.style } : null
   const unsupported = checkSupport()
   const hasKey = !!(apiKey.trim() || geminiKey.trim())
 
   useEffect(() => { localStorage.setItem('openrouter_key', apiKey) }, [apiKey])
   useEffect(() => { localStorage.setItem('gemini_key', geminiKey) }, [geminiKey])
   useEffect(() => { localStorage.setItem('reelio_fit', fit) }, [fit])
+  useEffect(() => { localStorage.setItem('reelio_workers', workerPref) }, [workerPref])
+
+  /** Replace the word state. `all` = these words cover the whole video (subtitles, older cache entries). */
+  const resetWords = (ws: Word[], all: boolean, cov: [number, number][] = []) => {
+    timer.current?.wt.close(); timer.current = null
+    wordsRef.current = ws; covered.current = all ? [[0, Infinity]] : cov; setWords(ws)
+    setCanTime(all || ws.length > 0); setTiming(0); setTimerDl(null)
+  }
+  /** Makes sure the words of [start, end] are timed; resolves with all words known so far. Only the parts not yet
+   *  covered are timed, a whole transcribed piece at a time. Calls are serialized. */
+  const ensureWords = useCallback((start: number, end: number): Promise<Word[]> => {
+    const job = wordChain.current.then(async () => {
+      const t = timer.current
+      const gaps = t ? uncovered(covered.current, Math.max(0, start), end) : []
+      if (!t || !gaps.length) return wordsRef.current
+      // the transcribed pieces (24-30 s, cut at quiet points) that overlap a gap are timed whole
+      const todo = t.pieces.filter(p => gaps.some(([a, b]) => p.offset < b && p.offset + p.len > a))
+      if (!todo.length) { covered.current = mergeRanges([...covered.current, ...gaps]); return wordsRef.current }
+      setTiming(n => n + 1)
+      const audio = await openAudio(t.file)
+      try {
+        const read = async (p: Piece) => { for await (const sl of audio.slices(p.offset, p.offset + p.len, p.len + 1, 0)) return sl.audio; return new Float32Array(0) }
+        const ws = keepWordsInSegments(await t.wt.words(todo, read), t.segs)
+        if (timer.current !== t) return wordsRef.current // the video changed meanwhile
+        const span = todo.map(p => [p.offset, p.offset + p.len] as [number, number])
+        const inSpan = (w: Word) => span.some(([a, b]) => w.start >= a && w.start < b)
+        wordsRef.current = [...wordsRef.current.filter(w => !inSpan(w)), ...ws].sort((x, y) => x.start - y.start)
+        covered.current = mergeRanges([...covered.current, ...gaps, ...span])
+        setWords(wordsRef.current)
+        const hit = await getTranscript(t.key)
+        if (hit && timer.current === t) void putTranscript(t.key, { ...hit, words: wordsRef.current, covered: covered.current })
+      } finally { audio.close(); setTiming(n => Math.max(0, n - 1)) }
+      return wordsRef.current
+    })
+    wordChain.current = job.catch(() => {})
+    return job
+  }, [])
+  const ensureCaptions = useCallback(async (start: number, end: number): Promise<CaptionConfig | null> =>
+    (capSet.on && canTime ? { words: await ensureWords(start, end), style: capSet.style } : null), [capSet, canTime, ensureWords])
+  // Time the words of every clip (best first) while captions are on; trims re-check after a short pause.
+  useEffect(() => {
+    if (!capSet.on || !clips.length || !timer.current) return
+    const id = setTimeout(() => {
+      for (const c of clips) ensureWords(c.start, c.end).catch(e => setWarn(`Timing the caption words failed: ${e instanceof Error ? e.message : e}`))
+    }, 400)
+    return () => clearTimeout(id)
+  }, [capSet.on, clips, ensureWords])
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
 
   const runClips = async (segs: Segment[], force = false) => {
@@ -124,7 +210,7 @@ export default function App() {
     if (hit?.subs && hit.segs.length) {
       scan.current = { tracks: hit.subs.tracks, cues: hit.subs.cues }
       const t = hit.subs.tracks.find(x => x.id === hit.subs!.trackId)!
-      segments.current = hit.segs; loud.current = hit.loud; setWords(hit.words); setCached(true)
+      segments.current = hit.segs; loud.current = hit.loud; resetWords(hit.words, true); setCached(true)
       const label = `${trackLabel(t)} · ${hit.segs.length.toLocaleString()} cues`
       setSubs({ tracks: hit.subs.tracks, trackId: t.id, label }); setInfo(i => ({ ...i, subs: label }))
       await runClips(hit.segs); return true
@@ -154,7 +240,7 @@ export default function App() {
       setInfo(i => ({ ...i, pct: Math.min(100, Math.round((done / audio.duration) * 100)), elapsed: el, left, speed: done / el }))
     }
     console.info(`[reelio] subtitles: ${tr.segs.length} cues, loudness pass ${((Date.now() - t0) / 1000).toFixed(1)}s for ${Math.round(audio.duration)}s of audio`)
-    segments.current = tr.segs; loud.current = meter.finish(); setWords(tr.words)
+    segments.current = tr.segs; loud.current = meter.finish(); resetWords(tr.words, true)
     await putTranscript(key, { segs: tr.segs, loud: loud.current, words: tr.words, subs: { tracks: found.tracks, cues: found.cues, trackId: track.id } })
     await runClips(tr.segs, force)
     return true
@@ -168,7 +254,7 @@ export default function App() {
     setWarn(''); setCached(false)
     const label = `${trackLabel(t)} · ${tr.segs.length.toLocaleString()} cues`
     setSubs({ tracks: sc.tracks, trackId: id, label }); setInfo(i => ({ ...i, subs: label }))
-    segments.current = tr.segs; setWords(tr.words)
+    segments.current = tr.segs; resetWords(tr.words, true)
     void putTranscript(subsKey(f), { segs: tr.segs, loud: loud.current, words: tr.words, subs: { tracks: sc.tracks, cues: sc.cues, trackId: id } })
     await runClips(tr.segs)
   }
@@ -176,84 +262,71 @@ export default function App() {
   const start = async (f: File, force = false, whisper = false) => {
     void runFacecam(f)
     setSubs(null); scan.current = null; setNeedKey(false)
-    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; setWords([]); loud.current = null; setInfo(NO_INFO)
+    setFile(f); setUrl(URL.createObjectURL(f)); setClips([]); setError(null); setWarn(''); setCached(false); setAllErr(''); setAnsweredBy(''); segments.current = null; resetWords([], false); loud.current = null; setInfo(NO_INFO)
     let audio: Awaited<ReturnType<typeof openAudio>> | null = null
-    let tr: Awaited<ReturnType<typeof createPool>> | null = null
     try {
       setStage('model'); setStatus('Opening file…')
       audio = await openAudio(f)
       if (!whisper && await fromSubtitles(f, audio, force)) return
-      const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-tiny'
+      // base is the default: with one 30 s window per slice it is ~20% slower than tiny and far more accurate
+      const model: WhisperModel = modelPref !== 'auto' ? modelPref : 'onnx-community/whisper-base'
       const mname = model.split('/')[1]
       setInfo(i => ({ ...i, model: mname }))
       const key = cacheKey(f, model)
+      const timeWords = (pieces: Piece[], segs: Segment[]) => { timer.current = { wt: createWordTimer(model, setTimerDl), file: f, key, pieces, segs }; setCanTime(true) }
       if (force) await delTranscript(key)
       else {
         const hit = await getTranscript(key)
-        if (hit?.segs.length) { segments.current = hit.segs; loud.current = hit.loud; setWords(hit.words ?? []); setCached(true); await runClips(hit.segs); return }
-      }
-      setStatus(`Downloading ${mname}… 0%`)
-      tr = await createPool(model, workerPref === 'auto' ? 'auto' : Number(workerPref), p => { setStatus(`Downloading ${mname}… ${p}%`); setInfo(i => ({ ...i, download: p })) })
-      const pool = tr.workers
-      const device = `${mname}${pool.length > 1 ? ` × ${pool.length} workers` : ''} · ` + (tr.device === 'webgpu' ? `WebGPU${tr.gpu ? ` (${tr.gpu})` : ''}` : 'WASM (CPU, slower)')
-      setInfo(i => ({ ...i, workers: pool.length, device: tr!.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU, slower)', gpu: tr!.gpu || null }))
-      if (tr.device === 'webgpu' && /intel/i.test(tr.gpu))
-        setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
-      setStage('transcribe')
-      const segs: Segment[] = [], wds: Word[] = []
-      const meter = new LoudnessMeter()
-      const t0 = Date.now()
-      let done = 0, skipped = 0, partial = false
-      const report = () => {
-        const el = (Date.now() - t0) / 1000
-        const left = done > 0 ? ((audio!.duration - done) * el) / done : 0
-        setStatus(`Transcribing… ${Math.min(100, Math.round((done / audio!.duration) * 100))}% · ${dur(el)} elapsed${done > 0 ? ` · ~${dur(left)} left · ${(done / el).toFixed(1)}× realtime` : ''} · ${device}`)
-        setInfo(i => ({ ...i, pct: Math.min(100, Math.round((done / audio!.duration) * 100)), elapsed: el, left: done > 0 ? left : null, speed: done > 0 ? done / el : null }))
-      }
-      report()
-      // One lane per worker. Lanes pull the next slice only when their worker is idle, so at most one slice per
-      // worker (plus the generator's own buffer) is in memory. Segments arrive out of order; sorted below.
-      const it = audio.slices()
-      let fatal: unknown = null
-      const lane = async (w: (typeof pool)[number]) => {
-        for (;;) {
-          const { value: sl, done: end } = await it.next()
-          if (end) return
-          const len = sl.audio.length / 16000
-          meter.add(sl.audio, sl.offset) // before the buffer is handed to the worker
-          let buf = sl.audio
-          try {
-            for (let attempt = 0; ; attempt++) { // one retry per slice, then skip it
-              try { const r = await w.run(buf, sl.offset); segs.push(...r.segments); wds.push(...r.words); break } catch (e) {
-                const back = (e as { audio?: Float32Array }).audio
-                if (!back) throw e // worker died: this lane stops
-                if (attempt === 1) { skipped++; break }
-                buf = back
-              }
-            }
-          } catch (e) { fatal ??= e; return }
-          done += len; report()
+        if (hit?.segs.length) {
+          segments.current = hit.segs; loud.current = hit.loud; setCached(true)
+          const all = !hit.pieces && (hit.words?.length ?? 0) > 0 // entries from before lazy word timing hold every word
+          resetWords(hit.words ?? [], all, hit.covered ?? [])
+          if (hit.pieces) timeWords(hit.pieces, hit.segs)
+          await runClips(hit.segs); return
         }
       }
-      await Promise.all(pool.map(lane))
-      segs.sort((x, y) => x.start - y.start); wds.sort((x, y) => x.start - y.start)
-      if (fatal) {
-        if (!segs.length) throw fatal
-        partial = true
-        setWarn(`A transcription worker stopped (${fatal instanceof Error ? fatal.message : fatal}) after ${fmt(done)} of audio; clips use the partial transcript.`)
+      setStatus(`Downloading ${mname}… 0%`)
+      const meter = new LoudnessMeter()
+      let t0 = Date.now(), device = '', workers = 0
+      const report = (done: number) => {
+        const el = (Date.now() - t0) / 1000
+        const left = done > 0 ? ((audio!.duration - done) * el) / done : 0
+        setStatus(`Transcribing… ${Math.min(100, Math.round((done / audio!.duration) * 100))}% · ${dur(el)} elapsed${done > 0 ? ` · ~${dur(left)} left · ${(done / el).toFixed(1)}× realtime` : ''} · ${device}${workers > 1 ? ` × ${workers} workers` : ''}`)
+        setInfo(i => ({ ...i, workers, pct: Math.min(100, Math.round((done / audio!.duration) * 100)), elapsed: el, left: done > 0 ? left : null, speed: done > 0 ? done / el : null }))
       }
-      if (skipped) setWarn(w => w || `${skipped} audio slice(s) failed and were skipped.`)
+      const r = await transcribe({
+        model, want: workerPref === 'auto' ? 'auto' : Number(workerPref), slices: audio.slices(),
+        onDownload: p => { setStatus(`Downloading ${mname}… ${p}%`); setInfo(i => ({ ...i, download: p })) },
+        onReady: p => {
+          setStage('transcribe')
+          device = `${mname} · ` + (p.device === 'webgpu' ? `WebGPU${p.gpu ? ` (${p.gpu})` : ''}` : 'WASM (CPU, slower)')
+          workers = p.workers
+          setInfo(i => ({ ...i, workers: p.workers, device: p.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU, slower)', gpu: p.gpu || null }))
+          if (p.device === 'webgpu' && /intel/i.test(p.gpu))
+            setWarn('Running on the Intel iGPU. For the NVIDIA GPU: Windows Settings › Display › Graphics › Chrome › High performance, then restart Chrome.')
+          t0 = Date.now(); report(0)
+        },
+        onSlice: sl => meter.add(sl.audio, sl.offset),
+        onProgress: (done, n) => { workers = n; report(done) },
+      })
+      console.info(`[reelio] transcribed ${Math.round(r.done)}s, up to ${r.workers} worker(s): ${r.tuneLog.join('; ')}`)
+      const segs = r.segs
+      const partial = !!r.fatal
+      if (r.fatal) setWarn(`A transcription worker stopped (${r.fatal instanceof Error ? r.fatal.message : r.fatal}) after ${fmt(r.done)} of audio; clips use the partial transcript.`)
+      if (r.skipped) setWarn(w => w || `${r.skipped} audio slice(s) failed and were skipped.`)
       if (!segs.length) throw new Error('No speech was detected in this video.')
-      segments.current = segs; setWords(wds)
+      segments.current = segs
       loud.current = meter.finish()
-      if (!partial && !skipped) await putTranscript(key, { segs, loud: loud.current, words: wds })
+      timeWords(r.pieces, segs)
+      if (capSet.on) timer.current?.wt.warm() // load the caption model while the LLM picks clips
+      if (!partial && !r.skipped) await putTranscript(key, { segs, loud: loud.current, words: [], covered: [], pieces: r.pieces })
       await runClips(segs, force)
     } catch (e) {
       setError({ msg: e instanceof Error ? e.message : String(e), retry: false }); setStage('error')
-    } finally { tr?.close(); audio?.close() }
+    } finally { audio?.close() }
   }
 
-  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; setWords([]); loud.current = null; setSubs(null); scan.current = null; side.current = null; setNeedKey(false) }
+  const reset = () => { fcAbort.current?.abort(); setFc(null); setFcBusy(false); setWarn(''); setCached(false); setAnsweredBy(''); setAllErr(''); setFile(null); setUrl(''); setStage('idle'); setClips([]); setError(null); setInfo(NO_INFO); segments.current = null; resetWords([], false); loud.current = null; setSubs(null); scan.current = null; side.current = null; setNeedKey(false) }
   const busy = stage === 'model' || stage === 'transcribe' || stage === 'clips'
   const trim = (i: number, t: { start: number; end: number }) => setClips(cs => cs.map((c, j) => (j === i ? { ...c, ...t } : c)))
   const downloadAll = async () => {
@@ -261,7 +334,8 @@ export default function App() {
     let ok = true
     for (let i = 0; i < clips.length; i++) {
       try {
-        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }), fcRect, captions)
+        const cap = await ensureCaptions(clips[i].start, clips[i].end)
+        const blob = await exportClip(file!, clips[i].start, clips[i].end, fit, p => setAll({ i, n: clips.length, p }), fcRect, cap)
         save(blob, outName(file!, i + 1))
       } catch (e) { setAllErr(`Clip ${i + 1}: ${e instanceof Error ? e.message : e}`); ok = false; break }
     }
@@ -390,7 +464,8 @@ export default function App() {
                         ]} />
                         {fcRect && <Chip tone="hot">Facecam layout is on</Chip>}
                         </div>
-                        <CaptionControls value={capSet} onChange={setCapSet} available={words.length > 0} />
+                        <CaptionControls value={capSet} onChange={setCapSet} available={canTime}
+                          busy={capSet.on && timing > 0 ? (timerDl !== null && timerDl < 100 ? `Downloading the caption model… ${timerDl}%` : 'Timing the words…') : ''} />
                       </div>
                       <DownloadAll n={clips.length} all={all} pct={allPct} done={allDone} disabled={all !== null || renders > 0} onClick={downloadAll} />
                     </div>
@@ -424,7 +499,7 @@ export default function App() {
                 <section className="grid gap-5 lg:grid-cols-2" aria-label="Clips">
                   {clips.map((c, i) => (
                     <m.div key={i} initial={{ opacity: 0, y: 24, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ delay: Math.min(i, 5) * 0.06, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
-                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} captions={captions} locked={all !== null}
+                      <ClipCard rank={i + 1} clip={c} file={file!} url={url} fit={fcRect ? 'cover' : fit} fc={fcRect} captions={captions} ensureCaptions={ensureCaptions} locked={all !== null}
                         onTrim={t => trim(i, t)} onRendering={a => setRenders(n => Math.max(0, n + (a ? 1 : -1)))} />
                     </m.div>
                   ))}

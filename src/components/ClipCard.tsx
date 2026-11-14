@@ -27,8 +27,9 @@ function ScoreRing({ score }: { score: number }) {
   )
 }
 
-export default function ClipCard({ rank, clip, file, url, fit, fc, captions, locked, onTrim, onRendering }: {
+export default function ClipCard({ rank, clip, file, url, fit, fc, captions, ensureCaptions, locked, onTrim, onRendering }: {
   rank: number; clip: Clip; file: File; url: string; fit: Fit; fc: Rect | null; captions: CaptionConfig | null; locked: boolean
+  ensureCaptions: (start: number, end: number) => Promise<CaptionConfig | null> // captions with this range's words timed
   onTrim: (t: { start: number; end: number }) => void
   onRendering: (active: boolean) => void
 }) {
@@ -67,7 +68,7 @@ export default function ClipCard({ rank, clip, file, url, fit, fc, captions, loc
   }
   const download = async () => {
     setErr(''); setPct(0); setRendering(true)
-    try { save(await exportClip(file, clip.start, clip.end, fit, setPct, fc, captions), outName(file, rank)); setSaved(true); setTimeout(() => setSaved(false), 2500) }
+    try { const cap = captions && await ensureCaptions(clip.start, clip.end); save(await exportClip(file, clip.start, clip.end, fit, setPct, fc, cap), outName(file, rank)); setSaved(true); setTimeout(() => setSaved(false), 2500) }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
     setPct(null); setRendering(false)
   }

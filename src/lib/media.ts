@@ -15,12 +15,14 @@ export function checkSupport(): string | null {
 
 const openInput = (file: File) => new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
 
-const SLICE_TARGET_S = 90 // slice length; cut at the quietest 0.2 s within the next 15 s
-const SLICE_SLACK_S = 15
+// Slice length: one Whisper window (30 s) each, cut at the quietest 0.2 s between 24 and 30 s, so Whisper needs no
+// overlapping chunks and short slices keep every worker busy until the end.
+const SLICE_TARGET_S = 24
+const SLICE_SLACK_S = 6
 
 export interface AudioSlice { audio: Float32Array; offset: number }
 
-/** Open the file's audio (prefers an English-tagged track, else the first) and stream it as ~90 s slices of
+/** Open the file's audio (prefers an English-tagged track, else the first) and stream it as 24-30 s slices of
  *  16 kHz mono Float32, cut near silence. Memory stays bounded: only one slice (+ a small buffer) exists at a time. */
 export async function openAudio(file: File) {
   const input = openInput(file)
@@ -32,31 +34,34 @@ export async function openAudio(file: File) {
     if (!(await track.canDecode())) throw new Error('This audio codec cannot be decoded by your browser.')
     const duration = await input.computeDuration()
 
-    async function* slices(): AsyncGenerator<AudioSlice> {
-      const buf = new Float32Array((SLICE_TARGET_S + SLICE_SLACK_S + 10) * SAMPLE_RATE)
-      let n = 0, offset = 0 // samples buffered; absolute start (in samples) of buf[0]
+    /** `from`/`to` (seconds) limit the stream to part of the file; offsets stay absolute. */
+    async function* slices(from = 0, to = Infinity, target = SLICE_TARGET_S, slack = SLICE_SLACK_S): AsyncGenerator<AudioSlice> {
+      const buf = new Float32Array((target + slack + 10) * SAMPLE_RATE)
+      let n = 0, offset = Math.round(from * SAMPLE_RATE) // samples buffered; absolute start (in samples) of buf[0]
       let acc = 0, cnt = 0, pos = 0 // box-filter downsampler state
-      const cut = () => { // quietest 0.2 s window in [target, n)
+      const cut = () => { // quietest 0.2 s window in [target, min(n, target + slack))
         const w = SAMPLE_RATE / 5
-        let best = SLICE_TARGET_S * SAMPLE_RATE, bestE = Infinity
-        for (let i = best; i + w <= n; i += w) {
+        let best = target * SAMPLE_RATE, bestE = Infinity
+        for (let i = best; i + w <= Math.min(n, (target + slack) * SAMPLE_RATE); i += w) {
           let e = 0
           for (let j = i; j < i + w; j += 8) e += buf[j] * buf[j]
           if (e < bestE) { bestE = e; best = i }
         }
         return best + w / 2
       }
-      for await (const { buffer } of new AudioBufferSink(track).buffers()) {
+      for await (const { buffer, timestamp } of new AudioBufferSink(track).buffers(from, to)) {
         const ch = buffer.numberOfChannels
         const data = Array.from({ length: ch }, (_, c) => buffer.getChannelData(c))
         const step = SAMPLE_RATE / buffer.sampleRate
-        for (let i = 0; i < buffer.length; i++) {
+        const i0 = from > 0 ? Math.max(0, Math.ceil((from - timestamp) * buffer.sampleRate)) : 0 // the first buffer may start early
+        const i1 = Math.min(buffer.length, Math.ceil((to - timestamp) * buffer.sampleRate))
+        for (let i = i0; i < i1; i++) {
           let v = 0
           for (let c = 0; c < ch; c++) v += data[c][i]
           acc += v / ch; cnt++; pos += step
           if (pos >= 1) { pos -= 1; buf[n++] = acc / cnt; acc = 0; cnt = 0 }
         }
-        if (n >= (SLICE_TARGET_S + SLICE_SLACK_S) * SAMPLE_RATE) {
+        if (n >= (target + slack) * SAMPLE_RATE) {
           const c = Math.min(cut(), n)
           yield { audio: buf.slice(0, c), offset: offset / SAMPLE_RATE }
           buf.copyWithin(0, c, n); n -= c; offset += c
